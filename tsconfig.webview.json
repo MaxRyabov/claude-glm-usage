@@ -1,0 +1,16 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"lib": [
+			"ES2022",
+			"DOM"
+		],
+		"types": []
+	},
+	"include": [
+		"src/webview/chart-entry.ts"
+	],
+	"exclude": []
+}

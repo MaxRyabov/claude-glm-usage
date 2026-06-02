@@ -111,7 +111,11 @@ function buildI18n(): Record<string, string> {
   };
 }
 
-function getWebviewContent(nonce: string, i18n: Record<string, string>): string {
+export function getWebviewContent(
+  nonce: string,
+  i18n: Record<string, string>,
+  chartBundleUri: string,
+): string {
   const i18nJson = JSON.stringify(i18n);
   return /* html */`<!DOCTYPE html>
 <html lang="en">
@@ -120,8 +124,8 @@ function getWebviewContent(nonce: string, i18n: Record<string, string>): string 
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'none';
-    script-src 'nonce-${nonce}' https://cdn.jsdelivr.net;
-    style-src 'unsafe-inline';
+    script-src 'nonce-${nonce}';
+    style-src 'self' 'unsafe-inline';
     img-src data:;
     connect-src 'none';
   ">
@@ -498,7 +502,7 @@ function getWebviewContent(nonce: string, i18n: Record<string, string>): string 
 
   <div class="footer" id="footer">${i18n.lastUpdated} —</div>
 
-  <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script nonce="${nonce}" src="${chartBundleUri}"></script>
   <script nonce="${nonce}">
     const i18n = ${i18nJson};
     const vscode = acquireVsCodeApi();
@@ -1235,9 +1239,11 @@ export class DashboardPanel {
 
   private constructor(
     private readonly dataManager: DataManager,
+    extensionUri: vscode.Uri,
   ) {
     const nonce = generateNonce();
 
+    const distUri = vscode.Uri.joinPath(extensionUri, 'dist');
     this.panel = vscode.window.createWebviewPanel(
       'claudeStatusDashboard',
       vscode.l10n.t('Claude Code Usage'),
@@ -1245,11 +1251,15 @@ export class DashboardPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [],
+        // Allow loading the locally-bundled Chart.js (H-2) from dist/.
+        localResourceRoots: [distUri],
       }
     );
 
-    this.panel.webview.html = getWebviewContent(nonce, buildI18n());
+    const chartBundleUri = this.panel.webview
+      .asWebviewUri(vscode.Uri.joinPath(distUri, 'chart-bundle.js'))
+      .toString();
+    this.panel.webview.html = getWebviewContent(nonce, buildI18n(), chartBundleUri);
 
     // Handle messages from WebView
     this.panel.webview.onDidReceiveMessage(
@@ -1267,12 +1277,12 @@ export class DashboardPanel {
     this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
   }
 
-  static createOrShow(dataManager: DataManager): void {
+  static createOrShow(dataManager: DataManager, extensionUri: vscode.Uri): void {
     if (DashboardPanel.instance) {
       DashboardPanel.instance.panel.reveal(vscode.ViewColumn.Beside);
       return;
     }
-    DashboardPanel.instance = new DashboardPanel(dataManager);
+    DashboardPanel.instance = new DashboardPanel(dataManager, extensionUri);
   }
 
   static dispose(): void {

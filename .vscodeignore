@@ -13,3 +13,8 @@ vsc-extension-quickstart.md
 **/*.ts
 **/.vscode-test.*
 docs/**
+.claude/**
+.github/**
+openspec/**
+tsconfig.webview.json
+*.vsix

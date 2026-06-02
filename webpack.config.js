@@ -48,4 +48,34 @@ const extensionConfig = {
     level: "log", // enables logging required for problem matchers
   },
 };
-module.exports = [ extensionConfig ];
+
+// Separate bundle for the WebView: Chart.js compiled for a browser-like context
+// (target: 'web') and loaded locally instead of from a CDN (H-2). webpack 5 cannot
+// mix 'node' and 'web' targets in one config, so we export a config array.
+/** @type WebpackConfig */
+const chartBundleConfig = {
+  target: 'web',
+  mode: 'production',
+  entry: './src/webview/chart-entry.ts',
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: 'chart-bundle.js',
+  },
+  resolve: {
+    extensions: ['.ts', '.js'],
+    extensionAlias: { '.js': ['.ts', '.js'] },
+  },
+  module: {
+    rules: [
+      {
+        test: /\.ts$/,
+        exclude: /node_modules/,
+        // Browser-targeted tsconfig (DOM lib, ESM resolution) for the Chart.js bundle.
+        use: [{ loader: 'ts-loader', options: { configFile: 'tsconfig.webview.json' } }],
+      },
+    ],
+  },
+  devtool: false,
+};
+
+module.exports = [ extensionConfig, chartBundleConfig ];
