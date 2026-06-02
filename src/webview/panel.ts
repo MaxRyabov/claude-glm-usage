@@ -898,6 +898,8 @@ export function getWebviewContent(
 
       const providerLabel = {
         'claude-ai': 'Claude.ai',
+        'z-ai': 'Z.AI / GLM',
+        'custom-endpoint': 'Custom endpoint',
         'aws-bedrock': 'AWS Bedrock',
         'api-key': 'API Key',
       }[settings.provider] || settings.provider;

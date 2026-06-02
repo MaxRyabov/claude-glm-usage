@@ -21,12 +21,15 @@
   "config.heatmap.days.desc": "Number of days shown in the usage heatmap.",
   "config.credentials.path.desc": "Custom path to Claude credentials file. Leave null to use default (~/.claude/.credentials.json).",
   "config.claudeProvider.desc": "Claude provider type. Controls whether rate limit percentages or cost is shown in the status bar.",
-  "config.claudeProvider.auto": "Auto-detect: checks credentials file, then AWS/API key environment variables.",
+  "config.claudeProvider.auto": "Auto-detect: checks ANTHROPIC_BASE_URL (settings.json/env), then credentials file, then AWS/API key environment variables.",
   "config.claudeProvider.claudeAi": "Claude.ai subscription — shows rate limit utilization (5h window, 7d window if available).",
+  "config.claudeProvider.zAi": "z.ai (GLM models) — detected via ANTHROPIC_BASE_URL; no rate limits, shows token cost only (priced per GLM model).",
+  "config.claudeProvider.customEndpoint": "Custom Anthropic-compatible endpoint (via ANTHROPIC_BASE_URL) — no rate limits, shows token cost only.",
   "config.claudeProvider.awsBedrock": "AWS Bedrock — no rate limits, shows token cost only.",
   "config.claudeProvider.apiKey": "Anthropic API key — no rate limits, shows token cost only.",
-  "config.pricing.inputPerMillion.desc": "Cost per 1M input tokens in USD. Default: $3.00 (Claude Sonnet 4.x). Update this if Anthropic changes pricing.",
-  "config.pricing.outputPerMillion.desc": "Cost per 1M output tokens in USD. Default: $15.00 (Claude Sonnet 4.x). Update this if Anthropic changes pricing.",
-  "config.pricing.cacheReadPerMillion.desc": "Cost per 1M cache-read tokens in USD. Default: $0.30 (Claude Sonnet 4.x). Update this if Anthropic changes pricing.",
-  "config.pricing.cacheCreatePerMillion.desc": "Cost per 1M cache-creation tokens in USD. Default: $3.75 (Claude Sonnet 4.x). Update this if Anthropic changes pricing."
+  "config.pricing.inputPerMillion.desc": "Fallback cost per 1M input tokens in USD when the model is unknown. Default: $3.00 (Claude Sonnet 4.x). Known models (Claude, GLM) are priced automatically.",
+  "config.pricing.outputPerMillion.desc": "Fallback cost per 1M output tokens in USD when the model is unknown. Default: $15.00 (Claude Sonnet 4.x). Known models (Claude, GLM) are priced automatically.",
+  "config.pricing.cacheReadPerMillion.desc": "Fallback cost per 1M cache-read tokens in USD when the model is unknown. Default: $0.30 (Claude Sonnet 4.x).",
+  "config.pricing.cacheCreatePerMillion.desc": "Fallback cost per 1M cache-creation tokens in USD when the model is unknown. Default: $3.75 (Claude Sonnet 4.x).",
+  "config.pricing.models.desc": "Per-model price overrides keyed by model name or prefix (e.g. \"glm-4.6\", \"claude-opus\"). Each value is an object with inputPerMillion, outputPerMillion, cacheReadPerMillion, cacheCreatePerMillion. Overrides the built-in price table."
 }

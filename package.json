@@ -176,12 +176,16 @@
           "enum": [
             "auto",
             "claude-ai",
+            "z-ai",
+            "custom-endpoint",
             "aws-bedrock",
             "api-key"
           ],
           "enumDescriptions": [
             "%config.claudeProvider.auto%",
             "%config.claudeProvider.claudeAi%",
+            "%config.claudeProvider.zAi%",
+            "%config.claudeProvider.customEndpoint%",
             "%config.claudeProvider.awsBedrock%",
             "%config.claudeProvider.apiKey%"
           ],
@@ -211,6 +215,21 @@
           "default": 3.75,
           "minimum": 0,
           "description": "%config.pricing.cacheCreatePerMillion.desc%"
+        },
+        "claudeStatus.pricing.models": {
+          "type": "object",
+          "default": {},
+          "scope": "machine-overridable",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "inputPerMillion": { "type": "number", "minimum": 0 },
+              "outputPerMillion": { "type": "number", "minimum": 0 },
+              "cacheReadPerMillion": { "type": "number", "minimum": 0 },
+              "cacheCreatePerMillion": { "type": "number", "minimum": 0 }
+            }
+          },
+          "description": "%config.pricing.models.desc%"
         }
       }
     }

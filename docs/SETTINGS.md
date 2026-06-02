@@ -13,8 +13,15 @@ What the status bar and dashboard show, depending on your Claude plan and key se
 | You use… | `claudeProvider` (auto-detected) |
 |----------|----------------------------------|
 | Claude.ai subscription (Pro / Max) | `claude-ai` |
+| z.ai (GLM) via `ANTHROPIC_BASE_URL=https://api.z.ai/...` | `z-ai` |
+| Other custom Anthropic-compatible `ANTHROPIC_BASE_URL` | `custom-endpoint` |
 | AWS Bedrock | `aws-bedrock` |
 | Anthropic API key (`ANTHROPIC_API_KEY`) | `api-key` |
+
+> Detection reads `ANTHROPIC_BASE_URL` from `process.env`, then `~/.claude/settings.json`,
+> then `~/.claude/settings.local.json` — and a non-Anthropic base URL takes priority over a
+> (possibly stale) `claudeAiOauth` credentials file, so z.ai users never trigger an Anthropic
+> rate-limit call.
 
 ### Step 2 — What you see
 
@@ -27,6 +34,8 @@ What the status bar and dashboard show, depending on your Claude plan and key se
 | `claude-ai` | any | `false` + no cache | any | `🤖 5h:$0.00 7d:$0.00` | ❌ Not shown |
 | `aws-bedrock` | — | — | — | `🤖 5h:$14.21 7d:$53.17` | ❌ Not shown (no rate limits) |
 | `api-key` | — | — | — | `🤖 5h:$14.21 7d:$53.17` | ❌ Not shown (no rate limits) |
+| `z-ai` | — | — | — | `🤖 5h:$2.10 7d:$8.40` (per-GLM-model pricing) | ❌ Not shown (no rate limits) |
+| `custom-endpoint` | — | — | — | `🤖 5h:$2.10 7d:$8.40` | ❌ Not shown (no rate limits) |
 
 ### Step 3 — Recommended settings per use case
 

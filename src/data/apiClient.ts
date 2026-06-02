@@ -15,7 +15,7 @@ interface ClaudeCredentials {
   }
 }
 
-export type ClaudeProvider = 'claude-ai' | 'aws-bedrock' | 'api-key' | 'unknown';
+export type ClaudeProvider = 'claude-ai' | 'z-ai' | 'custom-endpoint' | 'aws-bedrock' | 'api-key' | 'unknown';
 
 export interface RateLimitData {
   utilization5h: number
@@ -26,7 +26,55 @@ export interface RateLimitData {
   has7dLimit: boolean
 }
 
+/**
+ * Read ANTHROPIC_BASE_URL the way Claude Code resolves it: process env first, then
+ * ~/.claude/settings.json, then ~/.claude/settings.local.json (the `env` object).
+ * Claude Code applies settings.json `env` when it launches the CLI, so it is NOT in
+ * the extension host's process.env — we must read the files directly. Reads are
+ * confined to ~/.claude and tolerate missing/malformed files (graceful degradation).
+ */
+export async function readClaudeBaseUrl(claudeDirOverride?: string): Promise<string | null> {
+  const fromEnv = process.env['ANTHROPIC_BASE_URL'];
+  if (fromEnv) { return fromEnv; }
+
+  const claudeDir = claudeDirOverride ?? path.join(os.homedir(), '.claude');
+  for (const file of ['settings.json', 'settings.local.json']) {
+    try {
+      const raw = await fs.readFile(path.join(claudeDir, file), 'utf-8');
+      const parsed = JSON.parse(raw) as { env?: Record<string, string> };
+      const url = parsed?.env?.['ANTHROPIC_BASE_URL'];
+      if (typeof url === 'string' && url.length > 0) { return url; }
+    } catch {
+      // missing or malformed — try the next file
+    }
+  }
+  return null;
+}
+
+/**
+ * Classify a base URL. An Anthropic host (or no URL) returns null so the normal
+ * credential/env probing runs; any other host is a third-party provider.
+ */
+export function classifyBaseUrl(baseUrl: string | null): 'z-ai' | 'custom-endpoint' | null {
+  if (!baseUrl) { return null; }
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return null; // not a parseable URL — ignore
+  }
+  if (host === 'api.anthropic.com' || host.endsWith('.anthropic.com')) { return null; }
+  if (host === 'z.ai' || host.endsWith('.z.ai')) { return 'z-ai'; }
+  return 'custom-endpoint';
+}
+
 export async function detectProvider(customCredPath?: string | null): Promise<ClaudeProvider> {
+  // 0. A custom ANTHROPIC_BASE_URL wins over everything. This must come BEFORE the
+  // credential probe so a stale claudeAiOauth file does not cause a misleading
+  // rate-limit call to api.anthropic.com when the user is actually on z.ai.
+  const customProvider = classifyBaseUrl(await readClaudeBaseUrl());
+  if (customProvider) { return customProvider; }
+
   // 1. Check for OAuth credentials (Claude.ai subscription)
   try {
     await readCredentials(customCredPath);

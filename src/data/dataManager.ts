@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import { readAllUsage, wasJsonlUpdatedRecently } from './jsonlReader';
+import type { PricingContext } from './pricing';
 import { fetchRateLimitData, detectProvider, RateLimitData, ClaudeProvider } from './apiClient';
 import { readCache, writeCache, isCacheValid, getCacheAge } from './cache';
 import { getAllProjectCosts, ProjectCostData } from './projectCost';
@@ -63,14 +64,28 @@ export class DataManager {
     return DataManager.instance;
   }
 
-  async getUsageData(forceRefresh = false): Promise<ClaudeUsageData> {
-    const [localUsage, cache] = await Promise.all([readAllUsage(config.tokenPricing), readCache()]);
+  /** Resolve the active provider from user config or auto-detection. */
+  private async resolveProvider(): Promise<ClaudeProvider> {
+    const configured = config.claudeProvider;
+    return configured === 'auto'
+      ? detectProvider(config.credentialsPath)
+      : configured;
+  }
 
-    // Determine provider type (user config or auto-detection)
-    const configuredProvider = config.claudeProvider;
-    const providerType: ClaudeProvider = configuredProvider === 'auto'
-      ? await detectProvider(config.credentialsPath)
-      : configuredProvider;
+  /** Build the per-model pricing context for a resolved provider. */
+  private pricingContext(providerType: ClaudeProvider): PricingContext {
+    return {
+      userOverrides: config.pricingModels,
+      providerType,
+      fallback: config.tokenPricing,
+    };
+  }
+
+  async getUsageData(forceRefresh = false): Promise<ClaudeUsageData> {
+    // Resolve the provider first: it gates the rate-limit call AND drives per-model
+    // pricing, so it must be known before reading local usage.
+    const [cache, providerType] = await Promise.all([readCache(), this.resolveProvider()]);
+    const localUsage = await readAllUsage(this.pricingContext(providerType));
 
     let rateLimitData: RateLimitData | null = null;
     let dataSource: ClaudeUsageData['dataSource'] = 'no-data';
@@ -154,7 +169,8 @@ export class DataManager {
 
   async refreshProjectCosts(): Promise<void> {
     try {
-      this.lastProjectCosts = await getAllProjectCosts(config.tokenPricing);
+      const providerType = await this.resolveProvider();
+      this.lastProjectCosts = await getAllProjectCosts(this.pricingContext(providerType));
     } catch {
       this.lastProjectCosts = [];
     }
@@ -244,7 +260,8 @@ export class DataManager {
       return this.lastHeatmapData;
     }
     try {
-      const data = await computeHeatmapData(config.heatmapDays);
+      const providerType = await this.resolveProvider();
+      const data = await computeHeatmapData(config.heatmapDays, this.pricingContext(providerType));
       this.lastHeatmapData = data;
       this.heatmapComputedAt = now;
       return data;

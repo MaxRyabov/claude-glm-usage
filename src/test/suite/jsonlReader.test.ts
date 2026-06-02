@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { calculateCost, readJsonlFile, isSafePath, getClaudeProjectsDir } from '../../data/jsonlReader';
+import { calculateCost, readJsonlFile, isSafePath, getClaudeProjectsDir, resolvePricing } from '../../data/jsonlReader';
 
 suite('JsonlReader', () => {
   test('calculateCost returns 0 for zero tokens', () => {
@@ -145,6 +145,28 @@ suite('JsonlReader', () => {
 
       const entries = await readJsonlFile(tmpFile);
       assert.strictEqual(entries.length, 2, 'entries without dedup key should all be included');
+    });
+
+    test('reads message.model and prices mixed GLM/Claude entries per model', async () => {
+      const usage = { input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const entry = (requestId: string, model: string) => JSON.stringify({
+        type: 'assistant', uuid: requestId, timestamp: new Date().toISOString(),
+        requestId, message: { id: `msg_${requestId}`, model, usage },
+      });
+      await fs.writeFile(tmpFile, [entry('r1', 'glm-4.6'), entry('r2', 'claude-opus-4-7')].join('\n'));
+
+      const entries = await readJsonlFile(tmpFile);
+      assert.strictEqual(entries.length, 2);
+
+      const models = entries.map(e => (e as { message?: { model?: string } }).message?.model);
+      assert.deepStrictEqual(models, ['glm-4.6', 'claude-opus-4-7']);
+
+      const blended = entries.reduce((sum, e) => {
+        const m = (e as { message?: { model?: string; usage?: typeof usage } }).message;
+        return sum + calculateCost(m!.usage!, resolvePricing(m!.model));
+      }, 0);
+      // glm-4.6 input $0.60/M + claude-opus input $15.00/M = $15.60, not 2 × $3.00 flat.
+      assert.strictEqual(blended, 0.60 + 15.00);
     });
   });
 });

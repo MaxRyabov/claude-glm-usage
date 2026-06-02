@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { calculateCost, TokenUsage } from '../data/jsonlReader';
+import { calculateCost, TokenUsage, PricingContext, resolvePricing } from '../data/pricing';
 
 export interface DailyUsage {
   date: string        // "YYYY-MM-DD" local time
@@ -42,6 +42,7 @@ function toLocalDateKey(ts: number): string {
 async function readJsonlForHeatmap(
   filePath: string,
   cutoff: number,
+  ctx: PricingContext,
 ): Promise<EntryForHeatmap[]> {
   const result: EntryForHeatmap[] = [];
   try {
@@ -54,7 +55,7 @@ async function readJsonlForHeatmap(
         if (obj.type !== 'assistant' || typeof obj.timestamp !== 'string') { continue; }
         const ts = new Date(obj.timestamp).getTime();
         if (isNaN(ts) || ts < cutoff) { continue; }
-        const msg = obj.message as { usage?: Partial<TokenUsage> } | undefined;
+        const msg = obj.message as { model?: string; usage?: Partial<TokenUsage> } | undefined;
         if (!msg?.usage) { continue; }
         const u = msg.usage;
         const cost = calculateCost({
@@ -62,7 +63,7 @@ async function readJsonlForHeatmap(
           output_tokens: u.output_tokens ?? 0,
           cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
           cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
-        });
+        }, resolvePricing(msg.model, ctx));
         result.push({
           timestamp: ts,
           cost,
@@ -117,7 +118,7 @@ export function aggregateByHour(entries: EntryForHeatmap[], days: number): Hourl
 
 // ---- main entry point -------------------------------------------------------
 
-export async function getHeatmapData(days = 90): Promise<HeatmapData> {
+export async function getHeatmapData(days = 90, ctx: PricingContext = {}): Promise<HeatmapData> {
   const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
   const cutoff = Date.now() - days * 24 * 3600 * 1000;
   const allEntries: EntryForHeatmap[] = [];
@@ -145,7 +146,7 @@ export async function getHeatmapData(days = 90): Promise<HeatmapData> {
     }
 
     // Read all qualifying files in parallel
-    const chunks = await Promise.all(filePaths.map(fp => readJsonlForHeatmap(fp, cutoff)));
+    const chunks = await Promise.all(filePaths.map(fp => readJsonlForHeatmap(fp, cutoff, ctx)));
     for (const chunk of chunks) { allEntries.push(...chunk); }
 
   } catch { /* ~/.claude/projects doesn't exist — return empty data */ }

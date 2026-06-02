@@ -2,7 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode';
-import { calculateCost, TokenUsage, TokenPricing, DEFAULT_PRICING } from './jsonlReader';
+import { calculateCost, TokenUsage, PricingContext, resolvePricing } from './pricing';
 
 export interface ProjectCostData {
   projectName: string
@@ -76,7 +76,7 @@ export async function workspacePathToProjectDir(workspacePath: string): Promise<
   return null;
 }
 
-async function getProjectCostForDir(projectDir: string, projectName: string, pricing: TokenPricing = DEFAULT_PRICING): Promise<ProjectCostData> {
+async function getProjectCostForDir(projectDir: string, projectName: string, ctx: PricingContext = {}): Promise<ProjectCostData> {
   const now = Date.now();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -119,7 +119,7 @@ async function getProjectCostForDir(projectDir: string, projectName: string, pri
           const tsMs = ts.getTime();
           if (isNaN(tsMs)) { continue; }
 
-          const cost = calculateCost(usage, pricing);
+          const cost = calculateCost(usage, resolvePricing(msg?.model as string | undefined, ctx));
           const ageMs = now - tsMs;
 
           if (ageMs < w30d) { cost30d += cost; }
@@ -146,7 +146,7 @@ async function getProjectCostForDir(projectDir: string, projectName: string, pri
   };
 }
 
-export async function getAllProjectCosts(pricing: TokenPricing = DEFAULT_PRICING): Promise<ProjectCostData[]> {
+export async function getAllProjectCosts(ctx: PricingContext = {}): Promise<ProjectCostData[]> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) { return []; }
 
@@ -156,7 +156,7 @@ export async function getAllProjectCosts(pricing: TokenPricing = DEFAULT_PRICING
       const projectDir = await workspacePathToProjectDir(workspacePath);
       if (!projectDir) { return null; }
       const projectName = path.basename(workspacePath);
-      return getProjectCostForDir(projectDir, projectName, pricing);
+      return getProjectCostForDir(projectDir, projectName, ctx);
     })
   );
 

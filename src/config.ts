@@ -76,6 +76,10 @@ export class ExtensionConfig {
     };
   }
 
+  get pricingModels(): Record<string, TokenPricing> {
+    return this.cfg.get('pricing.models', {});
+  }
+
   async setDisplayMode(mode: 'percent' | 'cost'): Promise<void> {
     await this.cfg.update('displayMode', mode, vscode.ConfigurationTarget.Global);
   }

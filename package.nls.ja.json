@@ -21,12 +21,15 @@
   "config.heatmap.days.desc": "使用ヒートマップに表示する日数。",
   "config.credentials.path.desc": "Claude 認証情報ファイルのカスタムパス。null でデフォルト（~/.claude/.credentials.json）を使用します。",
   "config.claudeProvider.desc": "Claude プロバイダーの種類。ステータスバーにレート制限の割合またはコストを表示するかどうかを制御します。",
-  "config.claudeProvider.auto": "自動検出: 認証情報ファイルを確認し、次に AWS/API キーの環境変数を確認します。",
+  "config.claudeProvider.auto": "自動検出: ANTHROPIC_BASE_URL（settings.json/環境変数）を確認し、次に認証情報ファイル、AWS/API キーの環境変数を確認します。",
   "config.claudeProvider.claudeAi": "Claude.ai サブスクリプション — レート制限の利用率を表示します（5h ウィンドウ、利用可能な場合は 7d ウィンドウ）。",
+  "config.claudeProvider.zAi": "z.ai（GLM モデル）— ANTHROPIC_BASE_URL で検出。レート制限なし、トークンコストのみ表示（GLM モデルごとに課金）。",
+  "config.claudeProvider.customEndpoint": "カスタム Anthropic 互換エンドポイント（ANTHROPIC_BASE_URL 経由）— レート制限なし、トークンコストのみ表示。",
   "config.claudeProvider.awsBedrock": "AWS Bedrock — レート制限なし、トークンコストのみ表示。",
   "config.claudeProvider.apiKey": "Anthropic API キー — レート制限なし、トークンコストのみ表示。",
-  "config.pricing.inputPerMillion.desc": "入力トークン 1M あたりのコスト（USD）。デフォルト: $3.00（Claude Sonnet 4.x）。Anthropic が料金を変更した場合は更新してください。",
-  "config.pricing.outputPerMillion.desc": "出力トークン 1M あたりのコスト（USD）。デフォルト: $15.00（Claude Sonnet 4.x）。Anthropic が料金を変更した場合は更新してください。",
-  "config.pricing.cacheReadPerMillion.desc": "キャッシュ読み取りトークン 1M あたりのコスト（USD）。デフォルト: $0.30（Claude Sonnet 4.x）。Anthropic が料金を変更した場合は更新してください。",
-  "config.pricing.cacheCreatePerMillion.desc": "キャッシュ作成トークン 1M あたりのコスト（USD）。デフォルト: $3.75（Claude Sonnet 4.x）。Anthropic が料金を変更した場合は更新してください。"
+  "config.pricing.inputPerMillion.desc": "モデル不明時のフォールバック入力トークン 1M あたりのコスト（USD）。デフォルト: $3.00（Claude Sonnet 4.x）。既知のモデル（Claude、GLM）は自動的に課金されます。",
+  "config.pricing.outputPerMillion.desc": "モデル不明時のフォールバック出力トークン 1M あたりのコスト（USD）。デフォルト: $15.00（Claude Sonnet 4.x）。既知のモデル（Claude、GLM）は自動的に課金されます。",
+  "config.pricing.cacheReadPerMillion.desc": "モデル不明時のフォールバックキャッシュ読み取りトークン 1M あたりのコスト（USD）。デフォルト: $0.30（Claude Sonnet 4.x）。",
+  "config.pricing.cacheCreatePerMillion.desc": "モデル不明時のフォールバックキャッシュ作成トークン 1M あたりのコスト（USD）。デフォルト: $3.75（Claude Sonnet 4.x）。",
+  "config.pricing.models.desc": "モデル名またはプレフィックス（例: \"glm-4.6\"、\"claude-opus\"）をキーとするモデルごとの価格上書き。各値は inputPerMillion、outputPerMillion、cacheReadPerMillion、cacheCreatePerMillion を持つオブジェクト。組み込み価格表を上書きします。"
 }

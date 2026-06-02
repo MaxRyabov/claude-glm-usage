@@ -174,9 +174,27 @@ Number of days is configurable via `claudeStatus.heatmap.days` (30 / 60 / 90).
 | Claude.ai Pro / any 5h-only tier | `5h:45%` | auto-hidden |
 | AWS Bedrock | cost only (`5h:$0.15 7d:$0.42`) | N/A |
 | Anthropic API key | cost only | N/A |
+| z.ai (GLM) | cost only, priced per GLM model | N/A |
+| Custom Anthropic-compatible endpoint | cost only | N/A |
 
 If auto-detection does not work for your setup, set `claudeStatus.claudeProvider`
 explicitly in VS Code Settings.
+
+### z.ai (GLM models)
+
+If you point Claude Code at [z.ai](https://z.ai) via `~/.claude/settings.json`:
+
+```jsonc
+{ "env": {
+  "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+  "ANTHROPIC_AUTH_TOKEN": "<your z.ai key>"
+} }
+```
+
+the extension auto-detects the provider from `ANTHROPIC_BASE_URL` (no rate-limit %,
+cost-only mode) and prices each entry by its model (`message.model` in the JSONL) using
+a built-in GLM price table — so cost is accurate instead of being computed at Claude's
+~5–7× higher rates. Override or add model rates with `claudeStatus.pricing.models`.
 
 ---
 
@@ -242,11 +260,12 @@ All settings are under the `claudeStatus` namespace in VS Code Settings.
 | `claudeStatus.notifications.budgetWarning` | `boolean` | `true` | Warn when budget threshold exceeded |
 | `claudeStatus.heatmap.days` | `30 \| 60 \| 90` | `90` | Days shown in usage heatmap |
 | `claudeStatus.credentials.path` | `string \| null` | `null` | Custom credentials file path |
-| `claudeStatus.claudeProvider` | `"auto"` \| `"claude-ai"` \| `"aws-bedrock"` \| `"api-key"` | `"auto"` | Provider type (auto-detect or explicit) |
-| `claudeStatus.pricing.inputPerMillion` | `number` | `3.00` | USD per 1M input tokens |
-| `claudeStatus.pricing.outputPerMillion` | `number` | `15.00` | USD per 1M output tokens |
-| `claudeStatus.pricing.cacheReadPerMillion` | `number` | `0.30` | USD per 1M cache-read tokens |
-| `claudeStatus.pricing.cacheCreatePerMillion` | `number` | `3.75` | USD per 1M cache-creation tokens |
+| `claudeStatus.claudeProvider` | `"auto"` \| `"claude-ai"` \| `"z-ai"` \| `"custom-endpoint"` \| `"aws-bedrock"` \| `"api-key"` | `"auto"` | Provider type (auto-detect or explicit) |
+| `claudeStatus.pricing.inputPerMillion` | `number` | `3.00` | Fallback USD per 1M input tokens (unknown models) |
+| `claudeStatus.pricing.outputPerMillion` | `number` | `15.00` | Fallback USD per 1M output tokens (unknown models) |
+| `claudeStatus.pricing.cacheReadPerMillion` | `number` | `0.30` | Fallback USD per 1M cache-read tokens (unknown models) |
+| `claudeStatus.pricing.cacheCreatePerMillion` | `number` | `3.75` | Fallback USD per 1M cache-creation tokens (unknown models) |
+| `claudeStatus.pricing.models` | `object` | `{}` | Per-model price overrides keyed by model name/prefix (e.g. `"glm-4.6"`, `"claude-opus"`) |
 
 ```jsonc
 // Example: settings.json

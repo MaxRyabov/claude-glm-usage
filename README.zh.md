@@ -217,11 +217,16 @@ npm run package       # → vscode-claude-status-*.vsix
 | `claudeStatus.notifications.budgetWarning` | `boolean` | `true` | 超过预算阈值时发出警告 |
 | `claudeStatus.heatmap.days` | `30 \| 60 \| 90` | `90` | 使用热力图显示的天数 |
 | `claudeStatus.credentials.path` | `string \| null` | `null` | 自定义凭证文件路径 |
-| `claudeStatus.claudeProvider` | `"auto"` \| `"claude-ai"` \| `"aws-bedrock"` \| `"api-key"` | `"auto"` | 提供商类型（自动检测或显式指定） |
-| `claudeStatus.pricing.inputPerMillion` | `number` | `3.00` | 每百万输入令牌的 USD 单价 |
-| `claudeStatus.pricing.outputPerMillion` | `number` | `15.00` | 每百万输出令牌的 USD 单价 |
-| `claudeStatus.pricing.cacheReadPerMillion` | `number` | `0.30` | 每百万缓存读取令牌的 USD 单价 |
-| `claudeStatus.pricing.cacheCreatePerMillion` | `number` | `3.75` | 每百万缓存创建令牌的 USD 单价 |
+| `claudeStatus.claudeProvider` | `"auto"` \| `"claude-ai"` \| `"z-ai"` \| `"custom-endpoint"` \| `"aws-bedrock"` \| `"api-key"` | `"auto"` | 提供商类型（自动检测或显式指定） |
+| `claudeStatus.pricing.inputPerMillion` | `number` | `3.00` | 模型未知时的回退每百万输入令牌 USD 单价 |
+| `claudeStatus.pricing.outputPerMillion` | `number` | `15.00` | 模型未知时的回退每百万输出令牌 USD 单价 |
+| `claudeStatus.pricing.cacheReadPerMillion` | `number` | `0.30` | 模型未知时的回退每百万缓存读取令牌 USD 单价 |
+| `claudeStatus.pricing.cacheCreatePerMillion` | `number` | `3.75` | 模型未知时的回退每百万缓存创建令牌 USD 单价 |
+| `claudeStatus.pricing.models` | `object` | `{}` | 按模型名称/前缀（如 `"glm-4.6"`、`"claude-opus"`）的价格覆盖 |
+
+> **z.ai（GLM）**: 在 `~/.claude/settings.json` 中将 `env.ANTHROPIC_BASE_URL` 设为
+> `https://api.z.ai/api/anthropic` 后，扩展会自动检测提供商（无速率限制，仅显示费用），
+> 并按每条记录的 `message.model` 使用 GLM 价格表计费。
 
 ```jsonc
 // 示例: settings.json

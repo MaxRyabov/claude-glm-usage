@@ -1,17 +1,22 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import {
+  TokenUsage,
+  TokenPricing,
+  DEFAULT_PRICING,
+  PricingContext,
+  calculateCost,
+  resolvePricing,
+} from './pricing';
 
-export interface TokenUsage {
-  input_tokens: number
-  output_tokens: number
-  cache_read_input_tokens: number
-  cache_creation_input_tokens: number
-}
+// Re-export the pricing primitives so existing importers keep working unchanged.
+export { TokenUsage, TokenPricing, DEFAULT_PRICING, PricingContext, calculateCost, resolvePricing };
 
 // Actual Claude Code JSONL structure (verified against real data):
 // - type: 'assistant' entries contain usage data
 // - usage is at entry.message.usage (NOT entry.usage)
+// - model is at entry.message.model (e.g. "claude-opus-4-7", "glm-4.6")
 // - costUSD field does not exist; always calculate from tokens
 // - cwd is at the top level of every entry
 interface JsonlEntry {
@@ -21,6 +26,7 @@ interface JsonlEntry {
   requestId?: string
   message?: {
     id?: string
+    model?: string
     usage?: TokenUsage
   }
 }
@@ -33,29 +39,6 @@ export interface AggregatedUsage {
   tokensOut5h: number
   tokensCacheRead5h: number
   tokensCacheCreate5h: number
-}
-
-export interface TokenPricing {
-  inputPerMillion: number
-  outputPerMillion: number
-  cacheReadPerMillion: number
-  cacheCreatePerMillion: number
-}
-
-export const DEFAULT_PRICING: TokenPricing = {
-  inputPerMillion: 3.00,
-  outputPerMillion: 15.00,
-  cacheReadPerMillion: 0.30,
-  cacheCreatePerMillion: 3.75,
-};
-
-export function calculateCost(usage: TokenUsage, pricing: TokenPricing = DEFAULT_PRICING): number {
-  return (
-    ((usage.input_tokens || 0) / 1_000_000) * pricing.inputPerMillion +
-    ((usage.output_tokens || 0) / 1_000_000) * pricing.outputPerMillion +
-    ((usage.cache_read_input_tokens || 0) / 1_000_000) * pricing.cacheReadPerMillion +
-    ((usage.cache_creation_input_tokens || 0) / 1_000_000) * pricing.cacheCreatePerMillion
-  );
 }
 
 export function getClaudeProjectsDir(): string {
@@ -151,7 +134,7 @@ export async function readJsonlFile(filePath: string): Promise<JsonlEntry[]> {
   return entries;
 }
 
-export async function readAllUsage(pricing: TokenPricing = DEFAULT_PRICING): Promise<AggregatedUsage> {
+export async function readAllUsage(ctx: PricingContext = {}): Promise<AggregatedUsage> {
   const now = Date.now();
   const window5h = 5 * 3600 * 1000;
   const window7d = 7 * 24 * 3600 * 1000;
@@ -177,7 +160,7 @@ export async function readAllUsage(pricing: TokenPricing = DEFAULT_PRICING): Pro
 
       const usage = entry.message?.usage;
       if (!usage) { continue; }
-      const cost = calculateCost(usage, pricing);
+      const cost = calculateCost(usage, resolvePricing(entry.message?.model, ctx));
 
       const age = now - ts;
       if (age <= window7d) {

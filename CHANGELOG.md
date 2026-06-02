@@ -9,6 +9,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **z.ai (GLM) provider support** — when Claude Code is pointed at z.ai (or any custom
+  Anthropic-compatible endpoint) via `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`,
+  the extension now auto-detects the provider and shows cost-only mode (no misleading
+  Anthropic rate-limit calls). New `claudeProvider` values `z-ai` and `custom-endpoint`.
+- **Per-model pricing** — cost is now computed from each entry's `message.model` using a
+  built-in price table (z.ai GLM tiers + Claude tiers), so GLM usage is priced correctly
+  instead of at Claude's ~5–7× higher flat rate, and mixed Claude+GLM usage blends right.
+- **`claudeStatus.pricing.models`** setting — override or add per-model rates, keyed by
+  model name/prefix (e.g. `"glm-4.6"`, `"claude-opus"`).
+
+### Changed
+
+- The flat `claudeStatus.pricing.*` values are now the **fallback** for unknown models;
+  known Claude and GLM models are priced automatically.
+
 ---
 
 ## [0.6.1] — 2026-05-28
