@@ -1,10 +1,10 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // Actual structure of ~/.claude/.credentials.json (verified against Claude Code v2.1.x)
 // macOS stores these in Keychain under service "Claude Code-credentials" with the same JSON format.
@@ -57,8 +57,11 @@ export async function detectProvider(customCredPath?: string | null): Promise<Cl
 const MACOS_KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
 async function readCredentialsFromKeychain(): Promise<string> {
-  const { stdout } = await execAsync(
-    `/usr/bin/security find-generic-password -s "${MACOS_KEYCHAIN_SERVICE}" -w`
+  // Use execFile with an argument array (no shell) so the service name cannot be
+  // interpreted as shell syntax — eliminates the command-injection vector (C-2).
+  const { stdout } = await execFileAsync(
+    '/usr/bin/security',
+    ['find-generic-password', '-s', MACOS_KEYCHAIN_SERVICE, '-w']
   );
   const creds = JSON.parse(stdout.trim()) as ClaudeCredentials;
   const token = creds.claudeAiOauth?.accessToken;
@@ -68,8 +71,23 @@ async function readCredentialsFromKeychain(): Promise<string> {
   return token;
 }
 
+/**
+ * Resolve a credentials path and confirm it stays inside ~/.claude/ (C-1).
+ * Throws if the resolved path escapes the directory (e.g. via `..` or an absolute
+ * path like /etc/passwd), preventing the setting from reading arbitrary files.
+ */
+export function validateCredentialsPath(p: string): string {
+  const resolved = path.resolve(p);
+  const claudeDir = path.resolve(path.join(os.homedir(), '.claude'));
+  if (!resolved.startsWith(claudeDir + path.sep) && resolved !== claudeDir) {
+    throw new Error(`Credentials path must be inside ~/.claude/: ${resolved}`);
+  }
+  return resolved;
+}
+
 async function readCredentials(customPath?: string | null): Promise<string> {
-  const credPath = customPath ?? path.join(os.homedir(), '.claude', '.credentials.json');
+  const rawPath = customPath ?? path.join(os.homedir(), '.claude', '.credentials.json');
+  const credPath = validateCredentialsPath(rawPath);
   try {
     const content = await fs.readFile(credPath, 'utf-8');
     const creds = JSON.parse(content) as ClaudeCredentials;

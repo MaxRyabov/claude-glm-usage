@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { calculateCost, readJsonlFile } from '../../data/jsonlReader';
+import { calculateCost, readJsonlFile, isSafePath, getClaudeProjectsDir } from '../../data/jsonlReader';
 
 suite('JsonlReader', () => {
   test('calculateCost returns 0 for zero tokens', () => {
@@ -63,6 +63,26 @@ suite('JsonlReader', () => {
       cache_creation_input_tokens: 1_000_000,
     });
     assert.strictEqual(cost, 3.00 + 15.00 + 0.30 + 3.75);
+  });
+
+  suite('isSafePath (M-3)', () => {
+    const projects = getClaudeProjectsDir();
+
+    test('accepts a file inside ~/.claude/projects', () => {
+      assert.strictEqual(isSafePath(path.join(projects, 'proj', 'session.jsonl')), true);
+    });
+
+    test('rejects a sibling path outside the projects directory', () => {
+      assert.strictEqual(isSafePath(path.join(projects, '..', 'secret.jsonl')), false);
+    });
+
+    test('rejects a traversal escaping the projects directory', () => {
+      assert.strictEqual(isSafePath(path.join(projects, 'proj', '..', '..', 'evil.jsonl')), false);
+    });
+
+    test('rejects an unrelated absolute path', () => {
+      assert.strictEqual(isSafePath('/etc/passwd'), false);
+    });
   });
 
   suite('readJsonlFile deduplication', () => {

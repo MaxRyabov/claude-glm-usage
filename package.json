@@ -168,6 +168,7 @@
             "null"
           ],
           "default": null,
+          "scope": "machine",
           "description": "%config.credentials.path.desc%"
         },
         "claudeStatus.claudeProvider": {
@@ -189,13 +190,13 @@
         },
         "claudeStatus.pricing.inputPerMillion": {
           "type": "number",
-          "default": 3.0,
+          "default": 3,
           "minimum": 0,
           "description": "%config.pricing.inputPerMillion.desc%"
         },
         "claudeStatus.pricing.outputPerMillion": {
           "type": "number",
-          "default": 15.0,
+          "default": 15,
           "minimum": 0,
           "description": "%config.pricing.outputPerMillion.desc%"
         },
@@ -226,17 +227,20 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.73.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/vscode": "^1.73.0",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
     "@typescript-eslint/parser": "^8.31.1",
-    "eslint": "^9.25.1",
-    "typescript": "^5.8.3",
-    "ts-loader": "^9.5.2",
-    "webpack": "^5.105.3",
-    "webpack-cli": "^6.0.1",
     "@vscode/test-cli": "^0.0.12",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.25.1",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.8.3",
+    "webpack": "^5.105.3",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "chart.js": "^4.4.0"
   }
 }

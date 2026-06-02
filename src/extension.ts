@@ -74,7 +74,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('vscode-claude-status.openDashboard', () => {
       import(/* webpackChunkName: "panel" */ './webview/panel.js')
-        .then(({ DashboardPanel }) => DashboardPanel.createOrShow(dataManager))
+        .then(({ DashboardPanel }) => DashboardPanel.createOrShow(dataManager, context.extensionUri))
         .catch(() => {});
     }),
     vscode.commands.registerCommand('vscode-claude-status.refresh', async () => {

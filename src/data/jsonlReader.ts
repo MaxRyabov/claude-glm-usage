@@ -62,6 +62,17 @@ export function getClaudeProjectsDir(): string {
   return path.join(os.homedir(), '.claude', 'projects');
 }
 
+/**
+ * Confirm a path stays inside ~/.claude/projects/ (M-3). Defends against path
+ * traversal (e.g. a symlink resolving elsewhere) so JSONL discovery never reads
+ * files outside the projects directory.
+ */
+export function isSafePath(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  const allowedRoot = path.resolve(getClaudeProjectsDir());
+  return resolved.startsWith(allowedRoot + path.sep);
+}
+
 export async function findAllJsonlFiles(): Promise<string[]> {
   const projectsDir = getClaudeProjectsDir();
   const files: string[] = [];
@@ -76,7 +87,17 @@ export async function findAllJsonlFiles(): Promise<string[]> {
         const entries = await fs.readdir(dirPath);
         for (const entry of entries) {
           if (entry.endsWith('.jsonl')) {
-            files.push(path.join(dirPath, entry));
+            // Resolve symlinks before the safety check so an entry pointing
+            // outside the projects directory is rejected (M-3).
+            let realPath = path.join(dirPath, entry);
+            try {
+              realPath = await fs.realpath(realPath);
+            } catch {
+              // fall back to the lexical path if realpath fails
+            }
+            if (isSafePath(realPath)) {
+              files.push(realPath);
+            }
           }
         }
       } catch {
