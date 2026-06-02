@@ -85,6 +85,12 @@ suite('validateCacheFile (M-2)', () => {
     assert.strictEqual(validateCacheFile(c), null);
   });
 
+  test('rejects NaN utilization (every NaN comparison is false)', () => {
+    const c = makeCache(10);
+    c.usageData.utilization5h = NaN;
+    assert.strictEqual(validateCacheFile(c), null);
+  });
+
   test('rejects a non-object', () => {
     assert.strictEqual(validateCacheFile(null), null);
     assert.strictEqual(validateCacheFile('string'), null);
@@ -93,7 +99,28 @@ suite('validateCacheFile (M-2)', () => {
 
 suite('writeCache permissions (M-1)', () => {
   // POSIX mode bits are meaningless on Windows; skip there (runs in CI/macOS).
-  const maybe = process.platform === 'win32' ? test.skip : test;
+  const isPosix = process.platform !== 'win32';
+  const maybe = isPosix ? test : test.skip;
+  const cachePath = path.join(os.homedir(), '.claude', 'vscode-claude-status-cache.json');
+  let backup: string | null = null;
+
+  // Back up and restore the real cache file so running the suite never clobbers
+  // the user's actual cache (the test writes to the production path).
+  suiteSetup(() => {
+    if (!isPosix) { return; }
+    try { backup = fs.readFileSync(cachePath, 'utf-8'); } catch { backup = null; }
+  });
+
+  suiteTeardown(() => {
+    if (!isPosix) { return; }
+    try {
+      if (backup !== null) {
+        fs.writeFileSync(cachePath, backup, { mode: 0o600 });
+      } else {
+        fs.rmSync(cachePath, { force: true });
+      }
+    } catch { /* ignore restore failures */ }
+  });
 
   maybe('writes the cache file with mode 0600', async () => {
     await writeCache({
@@ -104,7 +131,6 @@ suite('writeCache permissions (M-1)', () => {
       limitStatus: 'allowed',
       has7dLimit: true,
     });
-    const cachePath = path.join(os.homedir(), '.claude', 'vscode-claude-status-cache.json');
     const mode = fs.statSync(cachePath).mode & 0o777;
     assert.strictEqual(mode, 0o600, `expected 0600, got ${mode.toString(8)}`);
   });

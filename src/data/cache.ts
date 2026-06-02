@@ -37,10 +37,12 @@ export function validateCacheFile(data: unknown): CacheFile | null {
   if (!u || typeof u !== 'object') { return null; }
   const ud = u as Record<string, unknown>;
 
-  if (typeof ud.utilization5h !== 'number' || ud.utilization5h < 0 || ud.utilization5h > 1) { return null; }
-  if (typeof ud.utilization7d !== 'number' || ud.utilization7d < 0 || ud.utilization7d > 1) { return null; }
-  if (typeof ud.reset5hAt !== 'number' || ud.reset5hAt < 0) { return null; }
-  if (typeof ud.reset7dAt !== 'number' || ud.reset7dAt < 0) { return null; }
+  // Positive range checks (x >= a && x <= b) also reject NaN, which would slip
+  // through `x < a || x > b` because every comparison with NaN is false.
+  if (typeof ud.utilization5h !== 'number' || !(ud.utilization5h >= 0 && ud.utilization5h <= 1)) { return null; }
+  if (typeof ud.utilization7d !== 'number' || !(ud.utilization7d >= 0 && ud.utilization7d <= 1)) { return null; }
+  if (typeof ud.reset5hAt !== 'number' || !(ud.reset5hAt >= 0)) { return null; }
+  if (typeof ud.reset7dAt !== 'number' || !(ud.reset7dAt >= 0)) { return null; }
   if (typeof ud.limitStatus !== 'string' ||
       !['allowed', 'allowed_warning', 'denied'].includes(ud.limitStatus)) { return null; }
 
