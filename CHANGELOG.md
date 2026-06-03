@@ -9,6 +9,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.7.0] — 2026-06-03
+
 ### Added
 
 - **z.ai (GLM) provider support** — when Claude Code is pointed at z.ai (or any custom
