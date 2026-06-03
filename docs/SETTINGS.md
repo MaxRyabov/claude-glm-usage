@@ -34,7 +34,8 @@ What the status bar and dashboard show, depending on your Claude plan and key se
 | `claude-ai` | any | `false` + no cache | any | `🤖 5h:$0.00 7d:$0.00` | ❌ Not shown |
 | `aws-bedrock` | — | — | — | `🤖 5h:$14.21 7d:$53.17` | ❌ Not shown (no rate limits) |
 | `api-key` | — | — | — | `🤖 5h:$14.21 7d:$53.17` | ❌ Not shown (no rate limits) |
-| `z-ai` | — | — | — | `🤖 5h:$2.10 7d:$8.40` (per-GLM-model pricing) | ❌ Not shown (no rate limits) |
+| `z-ai` | — | `true` (default) + token | `percent` (default) | `🤖 5h:6% 7d:22%` (real z.ai quota) | ✅ Both windows |
+| `z-ai` | — | `true` + no token / fetch fails | — | `🤖 5h:$2.10 7d:$8.40` (per-GLM-model pricing) | ❌ Not shown (cost-only fallback) |
 | `custom-endpoint` | — | — | — | `🤖 5h:$2.10 7d:$8.40` | ❌ Not shown (no rate limits) |
 
 ### Step 3 — Recommended settings per use case

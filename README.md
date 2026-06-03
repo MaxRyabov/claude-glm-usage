@@ -174,7 +174,7 @@ Number of days is configurable via `claudeStatus.heatmap.days` (30 / 60 / 90).
 | Claude.ai Pro / any 5h-only tier | `5h:45%` | auto-hidden |
 | AWS Bedrock | cost only (`5h:$0.15 7d:$0.42`) | N/A |
 | Anthropic API key | cost only | N/A |
-| z.ai (GLM) | cost only, priced per GLM model | N/A |
+| z.ai (GLM) | `5h:6% 7d:22%` (real quota) + cost per GLM model | ✅ (weekly) |
 | Custom Anthropic-compatible endpoint | cost only | N/A |
 
 If auto-detection does not work for your setup, set `claudeStatus.claudeProvider`
@@ -191,10 +191,14 @@ If you point Claude Code at [z.ai](https://z.ai) via `~/.claude/settings.json`:
 } }
 ```
 
-the extension auto-detects the provider from `ANTHROPIC_BASE_URL` (no rate-limit %,
-cost-only mode) and prices each entry by its model (`message.model` in the JSONL) using
-a built-in GLM price table — so cost is accurate instead of being computed at Claude's
-~5–7× higher rates. Override or add model rates with `claudeStatus.pricing.models`.
+the extension auto-detects the provider from `ANTHROPIC_BASE_URL` and:
+
+- **shows your real z.ai quota** — the 5-hour and weekly utilization % from z.ai's
+  subscription dashboard (fetched from `…/api/monitor/usage/quota/limit` using your
+  `ANTHROPIC_AUTH_TOKEN`). Falls back to cost-only if no token is found.
+- **prices each entry by its model** (`message.model` in the JSONL) using a built-in GLM
+  price table — so cost is accurate instead of Claude's ~5–7× higher rates. Override or add
+  model rates with `claudeStatus.pricing.models`.
 
 ---
 

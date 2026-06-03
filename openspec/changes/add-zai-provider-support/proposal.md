@@ -23,7 +23,15 @@ mapped `claude-*`). The extension is **incorrect** under z.ai today:
 - **Z-2** → `detectProvider()` reads `ANTHROPIC_BASE_URL` (from `process.env`, then
   `~/.claude/settings.json`, then `settings.local.json`) **first**. A non-Anthropic host returns
   `z-ai` (host contains `z.ai`) or `custom-endpoint`, suppressing the misleading Anthropic
-  rate-limit call. These providers use cost-only mode (no rate-limit %), like Bedrock/api-key.
+  rate-limit call.
+- **Z-4 (quota)** → for `z-ai`, fetch the real 5-hour + weekly quota from z.ai's monitor
+  endpoint (`/api/monitor/usage/quota/limit`, `Authorization: Bearer <token>`) so the status bar
+  and dashboard show the same utilization % as the z.ai subscription page — not just local cost.
+  The token is read from `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` (env or settings). If no
+  token is available or the call fails, it degrades gracefully to cost-only mode. Other custom
+  endpoints stay cost-only (no comparable endpoint).
+- **Dedup fix** → project-cost aggregation now deduplicates streaming JSONL lines by
+  `requestId`/`message.id` (the global path already did), fixing over-counted project costs.
 - New setting `claudeStatus.pricing.models` (per-model override map) and two new
   `claudeStatus.claudeProvider` enum values (`z-ai`, `custom-endpoint`).
 - Status-bar/WebView provider labels for the new providers.
@@ -32,7 +40,8 @@ mapped `claude-*`). The extension is **incorrect** under z.ai today:
 
 - Affected specs: `cost-pricing`, `provider-detection` (both new).
 - Affected code: `src/data/pricing.ts` (new), `src/data/jsonlReader.ts`,
-  `src/data/projectCost.ts`, `src/webview/heatmap.ts`, `src/data/apiClient.ts`,
+  `src/data/projectCost.ts`, `src/webview/heatmap.ts`, `src/data/apiClient.ts`
+  (`readClaudeEnvVar`, `readZaiToken`, `fetchZaiQuota`/`parseZaiQuota`),
   `src/data/dataManager.ts`, `src/statusBar.ts`, `src/webview/panel.ts`, `src/config.ts`,
   `package.json`, `package.nls.json`, `package.nls.ja.json`, `package.nls.zh-cn.json`.
 - New tests under `src/test/suite/`.

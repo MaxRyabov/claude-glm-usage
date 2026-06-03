@@ -225,8 +225,9 @@ npm run package       # → vscode-claude-status-*.vsix
 | `claudeStatus.pricing.models` | `object` | `{}` | 按模型名称/前缀（如 `"glm-4.6"`、`"claude-opus"`）的价格覆盖 |
 
 > **z.ai（GLM）**: 在 `~/.claude/settings.json` 中将 `env.ANTHROPIC_BASE_URL` 设为
-> `https://api.z.ai/api/anthropic` 后，扩展会自动检测提供商（无速率限制，仅显示费用），
-> 并按每条记录的 `message.model` 使用 GLM 价格表计费。
+> `https://api.z.ai/api/anthropic` 后，扩展会自动检测提供商，显示 z.ai 的 5 小时／每周配额
+> （与订阅页面相同的使用率 %），并按每条记录的 `message.model` 使用 GLM 价格表计费；
+> 若未配置令牌则回退为仅显示费用。
 
 ```jsonc
 // 示例: settings.json

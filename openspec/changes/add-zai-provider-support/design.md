@@ -49,6 +49,25 @@ missing/malformed JSON (graceful degradation).
 host returns `z-ai` (host includes `z.ai`) or `custom-endpoint`. This removes the stale-OAuth
 false positive. The existing claude-ai → bedrock → api-key probes remain as the fallback chain.
 
+### 3a. z.ai quota fetch (added after initial cost-only design)
+z.ai exposes the 5-hour + weekly quota from its subscription dashboard via an internal but
+stable endpoint `GET {origin}/api/monitor/usage/quota/limit` (`Authorization: Bearer <token>`,
+`Accept: application/json`), used by several existing usage trackers. The response holds
+`data.limits[]`; `TOKENS_LIMIT` entries carry `percentage` (0–100) and `nextResetTime` (epoch
+ms), with `unit`/`number` describing the window. `parseZaiQuota()` distinguishes the windows by
+duration (short < 1 day → 5-hour, long → weekly) rather than the `unit` code, which varies by
+plan. The token comes from `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` (env → settings.json →
+settings.local.json via `readClaudeEnvVar`). The monitor URL is derived from the configured
+base URL's origin so it works for `api.z.ai` and regional/coding-plan hosts. Missing token or
+any error degrades to cost-only mode. Result reuses the existing `RateLimitData` shape and disk
+cache, so the status bar/dashboard render z.ai exactly like Claude.ai windows. Non-z.ai custom
+endpoints have no comparable endpoint and stay cost-only.
+
+### 3b. Project-cost dedup fix
+`projectCost` aggregation did not deduplicate the multiple JSONL lines Claude Code writes per
+streaming response, so project costs were over-counted (observed ~16× vs the global figure). It
+now applies the same `requestId`/`message.id` dedup `readJsonlFile` uses.
+
 ### 4. Cost-only mode is automatic
 `DataManager.getUsageData()` already routes every non-`claude-ai` provider to cost-only
 `local-only` mode and skips the Anthropic rate-limit call, so `z-ai`/`custom-endpoint` need no

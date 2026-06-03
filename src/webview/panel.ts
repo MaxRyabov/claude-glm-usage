@@ -580,9 +580,10 @@ export function getWebviewContent(
 
     function updateUsage(usage, mode) {
       const denied = usage.limitStatus === 'denied';
-      const isClaudeAi = usage.providerType === 'claude-ai';
-      const useCostMode = !isClaudeAi || usage.dataSource === 'local-only' || mode === 'cost';
-      const show7d = usage.has7dLimit && isClaudeAi;
+      const supportsRateLimit = usage.providerType === 'claude-ai' || usage.providerType === 'z-ai';
+      const hasRateData = supportsRateLimit && usage.dataSource !== 'local-only';
+      const useCostMode = !hasRateData || mode === 'cost';
+      const show7d = usage.has7dLimit && hasRateData;
 
       // Show/hide 7d row
       const row7d = document.getElementById('usage-7d-row');
@@ -944,7 +945,7 @@ export function getWebviewContent(
       const canvas = document.getElementById('predChart');
       if (!canvas) { return; }
 
-      const isClaudeAi = usage && usage.providerType === 'claude-ai';
+      const isClaudeAi = usage && (usage.providerType === 'claude-ai' || usage.providerType === 'z-ai') && usage.dataSource !== 'local-only';
       const hasUtil    = usage && usage.utilization5h > 0 && usage.resetIn5h > 0;
 
       if (!isClaudeAi || !hasUtil || typeof Chart === 'undefined') {

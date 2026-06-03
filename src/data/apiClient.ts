@@ -33,8 +33,8 @@ export interface RateLimitData {
  * the extension host's process.env — we must read the files directly. Reads are
  * confined to ~/.claude and tolerate missing/malformed files (graceful degradation).
  */
-export async function readClaudeBaseUrl(claudeDirOverride?: string): Promise<string | null> {
-  const fromEnv = process.env['ANTHROPIC_BASE_URL'];
+export async function readClaudeEnvVar(name: string, claudeDirOverride?: string): Promise<string | null> {
+  const fromEnv = process.env[name];
   if (fromEnv) { return fromEnv; }
 
   const claudeDir = claudeDirOverride ?? path.join(os.homedir(), '.claude');
@@ -42,13 +42,23 @@ export async function readClaudeBaseUrl(claudeDirOverride?: string): Promise<str
     try {
       const raw = await fs.readFile(path.join(claudeDir, file), 'utf-8');
       const parsed = JSON.parse(raw) as { env?: Record<string, string> };
-      const url = parsed?.env?.['ANTHROPIC_BASE_URL'];
-      if (typeof url === 'string' && url.length > 0) { return url; }
+      const value = parsed?.env?.[name];
+      if (typeof value === 'string' && value.length > 0) { return value; }
     } catch {
       // missing or malformed — try the next file
     }
   }
   return null;
+}
+
+export async function readClaudeBaseUrl(claudeDirOverride?: string): Promise<string | null> {
+  return readClaudeEnvVar('ANTHROPIC_BASE_URL', claudeDirOverride);
+}
+
+/** The z.ai auth token Claude Code sends — its API key, under either env name. */
+export async function readZaiToken(claudeDirOverride?: string): Promise<string | null> {
+  return (await readClaudeEnvVar('ANTHROPIC_AUTH_TOKEN', claudeDirOverride))
+    ?? (await readClaudeEnvVar('ANTHROPIC_API_KEY', claudeDirOverride));
 }
 
 /**
@@ -196,4 +206,85 @@ export async function fetchRateLimitData(customCredPath?: string | null): Promis
   }
 
   return { utilization5h: util5h, utilization7d: util7d, resetIn5h, resetIn7d, limitStatus, has7dLimit };
+}
+
+// --- z.ai quota -------------------------------------------------------------
+// z.ai exposes the same 5-hour + weekly quota shown on its subscription dashboard
+// via an internal monitor endpoint (undocumented but stable; used by several usage
+// trackers). data.limits[] holds TOKENS_LIMIT entries with a `percentage` (0–100)
+// and `nextResetTime` (epoch ms); unit/number describe the window (5 hours vs 7 days).
+const ZAI_QUOTA_PATH = '/api/monitor/usage/quota/limit';
+
+interface ZaiLimitEntry {
+  type?: string
+  unit?: number
+  number?: number
+  percentage?: number
+  nextResetTime?: number | null
+}
+
+interface ZaiQuotaResponse {
+  code?: number
+  success?: boolean
+  data?: { limits?: ZaiLimitEntry[] }
+}
+
+// unit codes vary across z.ai plans; map to a duration so we can tell the short
+// (5-hour) window from the long (weekly) one regardless of the exact code.
+function zaiUnitToMs(unit?: number): number {
+  switch (unit) {
+    case 5: return 60_000;            // minutes
+    case 3: return 3_600_000;         // hours
+    case 1: case 2: case 6: return 86_400_000; // days
+    default: return 3_600_000;
+  }
+}
+
+function clamp01(n: number): number {
+  if (!isFinite(n) || n < 0) { return 0; }
+  return n > 1 ? 1 : n;
+}
+
+export function parseZaiQuota(json: unknown): RateLimitData {
+  const resp = (json ?? {}) as ZaiQuotaResponse;
+  const limits = Array.isArray(resp.data?.limits) ? resp.data!.limits! : [];
+  const tokenLimits = limits.filter(l => l?.type === 'TOKENS_LIMIT');
+
+  const windows = tokenLimits.map(l => ({ l, ms: (l.number ?? 0) * zaiUnitToMs(l.unit) }));
+  // Short window (< 1 day) is the 5-hour quota; long window is the weekly quota.
+  const five = windows.find(w => w.ms < 86_400_000)?.l ?? windows[0]?.l;
+  const weekly = windows.find(w => w.ms >= 86_400_000)?.l;
+
+  const nowSec = Date.now() / 1000;
+  const util5h = five ? clamp01((five.percentage ?? 0) / 100) : 0;
+  const util7d = weekly ? clamp01((weekly.percentage ?? 0) / 100) : 0;
+  const resetIn5h = five?.nextResetTime ? Math.max(0, five.nextResetTime / 1000 - nowSec) : 0;
+  const resetIn7d = weekly?.nextResetTime ? Math.max(0, weekly.nextResetTime / 1000 - nowSec) : 0;
+  const has7dLimit = weekly !== undefined;
+
+  const limitStatus: RateLimitData['limitStatus'] =
+    (util5h >= 0.75 || (has7dLimit && util7d >= 0.75)) ? 'allowed_warning' : 'allowed';
+
+  return { utilization5h: util5h, utilization7d: util7d, resetIn5h, resetIn7d, limitStatus, has7dLimit };
+}
+
+export async function fetchZaiQuota(
+  baseUrl: string,
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<RateLimitData> {
+  // Derive the monitor host from the configured base URL's origin so this works
+  // for api.z.ai as well as regional/coding-plan hosts.
+  const origin = new URL(baseUrl).origin;
+  const response = await fetchImpl(origin + ZAI_QUOTA_PATH, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`z.ai quota request failed (HTTP ${response.status})`);
+  }
+  return parseZaiQuota(await response.json());
 }

@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { classifyBaseUrl, readClaudeBaseUrl, detectProvider } from '../../data/apiClient';
+import { classifyBaseUrl, readClaudeBaseUrl, readClaudeEnvVar, readZaiToken, detectProvider, parseZaiQuota } from '../../data/apiClient';
 
 suite('Provider detection — custom endpoints (Z-2)', () => {
   const ENV_KEY = 'ANTHROPIC_BASE_URL';
@@ -78,5 +78,69 @@ suite('Provider detection — custom endpoints (Z-2)', () => {
       process.env[ENV_KEY] = 'https://api.moonshot.cn/anthropic';
       assert.strictEqual(await detectProvider(), 'custom-endpoint');
     });
+  });
+});
+
+suite('z.ai quota', () => {
+  const AUTH = 'ANTHROPIC_AUTH_TOKEN';
+  const KEY = 'ANTHROPIC_API_KEY';
+  let savedAuth: string | undefined;
+  let savedKey: string | undefined;
+  let tmpDir: string;
+
+  setup(async () => {
+    savedAuth = process.env[AUTH]; savedKey = process.env[KEY];
+    delete process.env[AUTH]; delete process.env[KEY];
+    tmpDir = path.join(os.tmpdir(), `claude-token-test-${Date.now()}-${Math.floor(performance.now())}`);
+    await fs.mkdir(tmpDir, { recursive: true });
+  });
+  teardown(async () => {
+    savedAuth === undefined ? delete process.env[AUTH] : (process.env[AUTH] = savedAuth);
+    savedKey === undefined ? delete process.env[KEY] : (process.env[KEY] = savedKey);
+    try { await fs.rm(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  // Sample shaped like the real /api/monitor/usage/quota/limit response.
+  const sample = {
+    code: 200, success: true,
+    data: { limits: [
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 6,  nextResetTime: Date.now() + 2 * 3600_000 },
+      { type: 'TOKENS_LIMIT', unit: 6, number: 7, percentage: 22, nextResetTime: Date.now() + 5 * 86400_000 },
+      { type: 'TIME_LIMIT',   unit: 5, number: 1, percentage: 45 },
+    ] },
+  };
+
+  test('parseZaiQuota maps 5h and weekly token windows', () => {
+    const r = parseZaiQuota(sample);
+    assert.ok(Math.abs(r.utilization5h - 0.06) < 1e-9, `5h util: ${r.utilization5h}`);
+    assert.ok(Math.abs(r.utilization7d - 0.22) < 1e-9, `7d util: ${r.utilization7d}`);
+    assert.strictEqual(r.has7dLimit, true);
+    assert.ok(r.resetIn5h > 0 && r.resetIn7d > r.resetIn5h);
+    assert.strictEqual(r.limitStatus, 'allowed');
+  });
+
+  test('parseZaiQuota flags a warning at high utilization', () => {
+    const hot = { code: 200, success: true, data: { limits: [
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 90, nextResetTime: Date.now() + 3600_000 },
+    ] } };
+    assert.strictEqual(parseZaiQuota(hot).limitStatus, 'allowed_warning');
+  });
+
+  test('parseZaiQuota is safe on empty/garbage input', () => {
+    const r = parseZaiQuota({});
+    assert.strictEqual(r.utilization5h, 0);
+    assert.strictEqual(r.has7dLimit, false);
+  });
+
+  test('readZaiToken prefers AUTH_TOKEN then API_KEY from settings.json', async () => {
+    await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'k-key' } }));
+    assert.strictEqual(await readZaiToken(tmpDir), 'k-key');
+    await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'k-auth', ANTHROPIC_API_KEY: 'k-key' } }));
+    assert.strictEqual(await readZaiToken(tmpDir), 'k-auth');
+  });
+
+  test('readClaudeEnvVar reads an arbitrary env key from settings.local.json', async () => {
+    await fs.writeFile(path.join(tmpDir, 'settings.local.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'local-tok' } }));
+    assert.strictEqual(await readClaudeEnvVar('ANTHROPIC_AUTH_TOKEN', tmpDir), 'local-tok');
   });
 });

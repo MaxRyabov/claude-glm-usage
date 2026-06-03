@@ -42,6 +42,17 @@
 - [x] 4.6 TEST: `statusBar.test.ts` — `providerType: 'z-ai'` → Z.AI label + cost mode
 - [x] 4.7 TEST: `manifest.test.ts` — enum has `z-ai`/`custom-endpoint`; `pricing.models` key present
 
+## 7. z.ai quota display + dedup fix (added after initial cost-only design)
+- [x] 7.1 `apiClient.ts`: `readClaudeEnvVar()` + `readZaiToken()` (AUTH_TOKEN → API_KEY)
+- [x] 7.2 `apiClient.ts`: `parseZaiQuota()` (5h vs weekly by window duration) + `fetchZaiQuota()`
+  (Bearer token, origin-derived `/api/monitor/usage/quota/limit`)
+- [x] 7.3 `dataManager.ts`: fetch z.ai quota for `z-ai` with cache + graceful fallback to cost-only
+- [x] 7.4 `statusBar.ts` + `webview/panel.ts`: show rate-limit % for `z-ai` (percent mode, 7d row,
+  warning colors, prediction gauge); local-only stays cost-only
+- [x] 7.5 `projectCost.ts`: deduplicate streaming lines by `requestId`/`message.id` (cost over-count fix)
+- [x] 7.6 TEST: `parseZaiQuota` (5h/weekly map, warning, empty input), `readZaiToken`/`readClaudeEnvVar`
+- [x] 7.7 TEST: `projectCost` dedup counts each requestId once and prices by model
+
 ## 5. Documentation
 - [x] 5.1 README (en/ja/zh): z.ai setup section + provider table rows
 - [x] 5.2 `docs/SETTINGS.md`, `docs/DATA.md` (per-model pricing), `docs/ARCHITECTURE.md` (provider table)

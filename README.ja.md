@@ -230,8 +230,9 @@ npm run package       # → vscode-claude-status-*.vsix
 | `claudeStatus.pricing.models` | `object` | `{}` | モデル名/プレフィックス（例: `"glm-4.6"`、`"claude-opus"`）ごとの価格上書き |
 
 > **z.ai（GLM）**: `~/.claude/settings.json` の `env.ANTHROPIC_BASE_URL` を
-> `https://api.z.ai/api/anthropic` に設定すると、プロバイダーを自動検出し（レート制限なし、
-> コストのみ）、各エントリを `message.model` から GLM 料金表で計算します。
+> `https://api.z.ai/api/anthropic` に設定すると、プロバイダーを自動検出し、z.ai の
+> 5時間／週間クォータ（サブスク画面と同じ利用率%）を表示し、各エントリを `message.model` から
+> GLM 料金表で計算します。トークンが無い場合はコストのみ表示にフォールバックします。
 
 ```jsonc
 // 設定例: settings.json

@@ -28,10 +28,27 @@ The extension SHALL read `ANTHROPIC_BASE_URL` from `process.env`, then
 
 ### Requirement: Custom endpoint suppresses Anthropic rate-limit call
 When a non-Anthropic base URL is detected, the extension SHALL NOT call the Anthropic
-rate-limit endpoint and SHALL show cost-only mode, even if a stale `claudeAiOauth` credentials
-file exists.
+rate-limit endpoint, even if a stale `claudeAiOauth` credentials file exists.
 
 #### Scenario: Stale OAuth with z.ai base URL
 - **WHEN** a `claudeAiOauth` credentials file exists AND `ANTHROPIC_BASE_URL` is a z.ai host
-- **THEN** the provider is `z-ai`, no request is made to `api.anthropic.com`, and the status
-  bar shows cost-only mode
+- **THEN** the provider is `z-ai` and no request is made to `api.anthropic.com`
+
+#### Scenario: Non-z.ai custom endpoint is cost-only
+- **WHEN** the provider is `custom-endpoint`
+- **THEN** the status bar shows cost-only mode (no rate-limit %)
+
+### Requirement: z.ai quota display
+For the `z-ai` provider the extension SHALL fetch the 5-hour and weekly quota from z.ai's
+monitor endpoint and display the utilization percentages, mirroring the z.ai subscription
+dashboard. It SHALL degrade to cost-only mode when no auth token is available or the request
+fails.
+
+#### Scenario: Quota fetched and shown
+- **WHEN** the provider is `z-ai` and an `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` is available
+- **THEN** the extension requests `{origin}/api/monitor/usage/quota/limit` with a Bearer token
+  and shows the returned 5-hour and weekly utilization percentages
+
+#### Scenario: No token degrades gracefully
+- **WHEN** the provider is `z-ai` but no auth token is configured
+- **THEN** the extension shows cost-only mode without throwing

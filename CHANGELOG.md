@@ -13,8 +13,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **z.ai (GLM) provider support** — when Claude Code is pointed at z.ai (or any custom
   Anthropic-compatible endpoint) via `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`,
-  the extension now auto-detects the provider and shows cost-only mode (no misleading
-  Anthropic rate-limit calls). New `claudeProvider` values `z-ai` and `custom-endpoint`.
+  the extension now auto-detects the provider (no misleading Anthropic rate-limit calls).
+  New `claudeProvider` values `z-ai` and `custom-endpoint`.
+- **z.ai quota display** — for `z-ai`, the extension fetches the real 5-hour and weekly quota
+  from z.ai's monitor endpoint and shows the same utilization % as the z.ai subscription
+  dashboard (degrades to cost-only when no token is configured or the request fails).
 - **Per-model pricing** — cost is now computed from each entry's `message.model` using a
   built-in price table (z.ai GLM tiers + Claude tiers), so GLM usage is priced correctly
   instead of at Claude's ~5–7× higher flat rate, and mixed Claude+GLM usage blends right.
@@ -25,6 +28,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The flat `claudeStatus.pricing.*` values are now the **fallback** for unknown models;
   known Claude and GLM models are priced automatically.
+
+### Fixed
+
+- **Project cost over-counting** — per-project cost now deduplicates the multiple JSONL lines
+  Claude Code writes per streaming response (by `requestId`/`message.id`), matching the global
+  total instead of inflating it.
 
 ---
 

@@ -51,8 +51,10 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
   const isStale = dataSource === 'stale';
   const staleSuffix = isStale ? ` [${formatDuration(cacheAge)} ago]` : '';
 
-  // Non-Claude.ai providers (Bedrock, API key, local-only) always use cost mode
-  const useCostMode = providerType !== 'claude-ai' || dataSource === 'local-only' || displayMode === 'cost';
+  // claude-ai and z-ai expose utilization windows; other providers (Bedrock, API key)
+  // and any provider without live rate data (local-only) always use cost mode.
+  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
+  const useCostMode = !supportsRateLimit || dataSource === 'local-only' || displayMode === 'cost';
 
   let part5h: string;
   let part7d: string;
@@ -114,11 +116,13 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
     : vscode.l10n.t('{0} ago', formatDuration(cacheAge));
   const lines: string[] = [];
 
-  if (providerType === 'claude-ai') {
-    // Rate limit section — only for Claude.ai subscriptions
+  // Rate-limit section — claude-ai (Anthropic windows) and z-ai (quota), when live data exists
+  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
+  if (supportsRateLimit && dataSource !== 'local-only') {
+    const title = providerType === 'z-ai' ? vscode.l10n.t('Z.AI Usage') : vscode.l10n.t('Claude Code Usage');
     const bar5h = buildBar(utilization5h, 8);
     lines.push(
-      vscode.l10n.t('Claude Code Usage'),
+      title,
       '─────────────────────────────',
       `5h window:   ${formatPercent(utilization5h)} [${bar5h}] resets in ${formatDuration(resetIn5h)}`,
     );
@@ -171,8 +175,10 @@ function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
     return;
   }
 
-  // Non-Claude.ai providers don't have rate limits — no warning/error colors
-  if (providerType !== 'claude-ai') {
+  // Providers without live rate-limit data don't get warning/error colors.
+  // claude-ai and z-ai (when not in cost-only local mode) do.
+  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
+  if (!supportsRateLimit || dataSource === 'local-only') {
     item.backgroundColor = undefined;
     item.color = undefined;
     return;

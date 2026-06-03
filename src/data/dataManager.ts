@@ -3,7 +3,15 @@ import * as path from 'path';
 import * as os from 'os';
 import { readAllUsage, wasJsonlUpdatedRecently } from './jsonlReader';
 import type { PricingContext } from './pricing';
-import { fetchRateLimitData, detectProvider, RateLimitData, ClaudeProvider } from './apiClient';
+import {
+  fetchRateLimitData,
+  fetchZaiQuota,
+  readClaudeBaseUrl,
+  readZaiToken,
+  detectProvider,
+  RateLimitData,
+  ClaudeProvider,
+} from './apiClient';
 import { readCache, writeCache, isCacheValid, getCacheAge } from './cache';
 import { getAllProjectCosts, ProjectCostData } from './projectCost';
 import { computePrediction, PredictionData } from './prediction';
@@ -90,33 +98,40 @@ export class DataManager {
     let rateLimitData: RateLimitData | null = null;
     let dataSource: ClaudeUsageData['dataSource'] = 'no-data';
 
-    if (providerType === 'claude-ai' && config.rateLimitApiEnabled) {
-      // Fetch rate limits from Anthropic API
+    // claude-ai (Anthropic rate-limit headers) and z-ai (quota endpoint) both expose
+    // utilization windows; everything else is cost-only.
+    const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
+    const hasCostData = localUsage.cost7d > 0 || localUsage.cost5h > 0;
+
+    if (supportsRateLimit && config.rateLimitApiEnabled) {
       if (forceRefresh || (await this.shouldCallApi(cache))) {
         try {
-          rateLimitData = await fetchRateLimitData(config.credentialsPath);
+          rateLimitData = providerType === 'z-ai'
+            ? await this.fetchZaiRateLimit()
+            : await fetchRateLimitData(config.credentialsPath);
           await writeCache(rateLimitData);
           dataSource = 'api';
         } catch {
-          // credentials missing or network error — fall back to cache
+          // missing token/credentials or network error — fall back to cache, else cost-only
           if (cache) {
             rateLimitData = this.cacheToRateLimitData(cache.usageData);
             dataSource = isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale';
           } else {
-            dataSource = 'no-credentials';
+            dataSource = hasCostData ? 'local-only' : 'no-credentials';
           }
         }
       } else if (cache) {
         rateLimitData = this.cacheToRateLimitData(cache.usageData);
         dataSource = isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale';
+      } else {
+        dataSource = hasCostData ? 'local-only' : 'no-data';
       }
-    } else if (providerType === 'claude-ai' && cache) {
+    } else if (supportsRateLimit && cache) {
       // API disabled by user but cache exists — show stale rate limit data with age indicator
       rateLimitData = this.cacheToRateLimitData(cache.usageData);
       dataSource = 'stale';
     } else {
-      // Non-claude-ai provider, or no cache — cost only from local JSONL
-      const hasCostData = localUsage.cost7d > 0 || localUsage.cost5h > 0;
+      // Non-rate-limited provider, or no cache — cost only from local JSONL
       dataSource = hasCostData ? 'local-only' : 'no-credentials';
     }
 
@@ -157,6 +172,15 @@ export class DataManager {
       // Derive from cached reset timestamp: non-zero means a 7d limit exists
       has7dLimit: usageData.reset7dAt > 0,
     };
+  }
+
+  /** Fetch the z.ai 5h/weekly quota using the base URL + token from Claude settings. */
+  private async fetchZaiRateLimit(): Promise<RateLimitData> {
+    const [baseUrl, token] = await Promise.all([readClaudeBaseUrl(), readZaiToken()]);
+    if (!baseUrl || !token) {
+      throw new Error('z.ai base URL or auth token not configured');
+    }
+    return fetchZaiQuota(baseUrl, token);
   }
 
   private async shouldCallApi(cache: Awaited<ReturnType<typeof readCache>>): Promise<boolean> {

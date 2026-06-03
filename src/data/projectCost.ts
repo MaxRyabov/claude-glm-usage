@@ -76,7 +76,7 @@ export async function workspacePathToProjectDir(workspacePath: string): Promise<
   return null;
 }
 
-async function getProjectCostForDir(projectDir: string, projectName: string, ctx: PricingContext = {}): Promise<ProjectCostData> {
+export async function getProjectCostForDir(projectDir: string, projectName: string, ctx: PricingContext = {}): Promise<ProjectCostData> {
   const now = Date.now();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -88,6 +88,11 @@ async function getProjectCostForDir(projectDir: string, projectName: string, ctx
   let cost30d = 0;
   let sessionCount = 0;
   let lastActive: Date | null = null;
+
+  // Claude Code writes one JSONL line per content block of a streaming response, all
+  // sharing the same requestId/message.id and usage counts. Deduplicate so each API
+  // call is counted once (mirrors readJsonlFile) — otherwise cost is over-counted.
+  const seenRequestIds = new Set<string>();
 
   try {
     const files = await fs.readdir(projectDir);
@@ -107,6 +112,15 @@ async function getProjectCostForDir(projectDir: string, projectName: string, ctx
           const msg = entry.message as Record<string, unknown> | undefined;
           const rawUsage = msg?.usage as Record<string, number> | undefined;
           if (!rawUsage) { continue; }
+
+          const dedupeKey =
+            (typeof entry.requestId === 'string' && entry.requestId) ||
+            (typeof msg?.id === 'string' && (msg.id as string)) ||
+            null;
+          if (dedupeKey) {
+            if (seenRequestIds.has(dedupeKey)) { continue; }
+            seenRequestIds.add(dedupeKey);
+          }
 
           const usage: TokenUsage = {
             input_tokens: rawUsage.input_tokens || 0,
