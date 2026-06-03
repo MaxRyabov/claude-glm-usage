@@ -52,6 +52,7 @@
 - [x] 7.5 `projectCost.ts`: deduplicate streaming lines by `requestId`/`message.id` (cost over-count fix)
 - [x] 7.6 TEST: `parseZaiQuota` (5h/weekly map, warning, empty input), `readZaiToken`/`readClaudeEnvVar`
 - [x] 7.7 TEST: `projectCost` dedup counts each requestId once and prices by model
+- [x] 7.8 `fetchZaiQuota`: Bearer→raw token auth fallback (coding-plan keys) + TEST
 
 ## 5. Documentation
 - [x] 5.1 README (en/ja/zh): z.ai setup section + provider table rows

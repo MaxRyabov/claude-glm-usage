@@ -276,15 +276,24 @@ export async function fetchZaiQuota(
   // Derive the monitor host from the configured base URL's origin so this works
   // for api.z.ai as well as regional/coding-plan hosts.
   const origin = new URL(baseUrl).origin;
-  const response = await fetchImpl(origin + ZAI_QUOTA_PATH, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Accept': 'application/json',
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`z.ai quota request failed (HTTP ${response.status})`);
+  const url = origin + ZAI_QUOTA_PATH;
+
+  // Standard plans accept `Bearer <token>`; z.ai coding-plan endpoints accept the
+  // token directly. Try Bearer first, then fall back to the raw token on 401/403.
+  const authVariants = [`Bearer ${token}`, token];
+  let lastStatus = 0;
+  for (const authorization of authVariants) {
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      headers: { 'Authorization': authorization, 'Accept': 'application/json' },
+    });
+    if (response.ok) {
+      return parseZaiQuota(await response.json());
+    }
+    lastStatus = response.status;
+    if (response.status !== 401 && response.status !== 403) {
+      break; // non-auth error — retrying with a different token format won't help
+    }
   }
-  return parseZaiQuota(await response.json());
+  throw new Error(`z.ai quota request failed (HTTP ${lastStatus})`);
 }

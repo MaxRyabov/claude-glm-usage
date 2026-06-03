@@ -11,6 +11,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.7.1] — 2026-06-03
+
+### Changed
+
+- **z.ai quota auth fallback** — the quota request now tries `Authorization: Bearer <token>`
+  first and falls back to the raw token on a 401/403, so z.ai **coding-plan** keys (which expect
+  the token without the `Bearer` prefix) also return live 5-hour / weekly quota instead of
+  silently dropping to cost-only mode.
+
+---
+
 ## [0.7.0] — 2026-06-03
 
 ### Added

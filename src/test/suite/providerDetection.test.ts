@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { classifyBaseUrl, readClaudeBaseUrl, readClaudeEnvVar, readZaiToken, detectProvider, parseZaiQuota } from '../../data/apiClient';
+import { classifyBaseUrl, readClaudeBaseUrl, readClaudeEnvVar, readZaiToken, detectProvider, parseZaiQuota, fetchZaiQuota } from '../../data/apiClient';
 
 suite('Provider detection — custom endpoints (Z-2)', () => {
   const ENV_KEY = 'ANTHROPIC_BASE_URL';
@@ -142,5 +142,34 @@ suite('z.ai quota', () => {
   test('readClaudeEnvVar reads an arbitrary env key from settings.local.json', async () => {
     await fs.writeFile(path.join(tmpDir, 'settings.local.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'local-tok' } }));
     assert.strictEqual(await readClaudeEnvVar('ANTHROPIC_AUTH_TOKEN', tmpDir), 'local-tok');
+  });
+
+  test('fetchZaiQuota falls back to a raw token when Bearer is rejected', async () => {
+    const okBody = JSON.stringify({ code: 200, success: true, data: { limits: [
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 10, nextResetTime: Date.now() + 3600_000 },
+    ] } });
+    const seen: string[] = [];
+    const fakeFetch = (async (_url: string, init: { headers: Record<string, string> }) => {
+      const auth = init.headers['Authorization'];
+      seen.push(auth);
+      if (auth.startsWith('Bearer ')) {
+        return { ok: false, status: 401, json: async () => ({}) } as unknown as Response;
+      }
+      return { ok: true, status: 200, json: async () => JSON.parse(okBody) } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const r = await fetchZaiQuota('https://api.z.ai/api/anthropic', 'tok123', fakeFetch);
+    assert.ok(Math.abs(r.utilization5h - 0.10) < 1e-9);
+    assert.deepStrictEqual(seen, ['Bearer tok123', 'tok123']);
+  });
+
+  test('fetchZaiQuota throws on a non-auth HTTP error without retrying', async () => {
+    let calls = 0;
+    const fakeFetch = (async () => {
+      calls++;
+      return { ok: false, status: 500, json: async () => ({}) } as unknown as Response;
+    }) as unknown as typeof fetch;
+    await assert.rejects(() => fetchZaiQuota('https://api.z.ai/api/anthropic', 't', fakeFetch));
+    assert.strictEqual(calls, 1);
   });
 });
