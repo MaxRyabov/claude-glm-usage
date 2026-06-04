@@ -11,6 +11,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.7.3] — 2026-06-04
+
+### Fixed
+
+- **z.ai prediction chart not rendering** — z.ai omits a reset timestamp for the rolling
+  5-hour window (its dashboard only shows the weekly reset), so `resetIn5h` was `0`, which hid
+  the dashboard prediction chart and made the exhaustion estimate mis-cap at zero. The reset
+  horizon now falls back to the window's own length (5h / 7d, from the entry's `unit`/`number`)
+  when z.ai doesn't return an explicit reset time.
+
+---
+
 ## [0.7.2] — 2026-06-03
 
 ### Fixed

@@ -256,10 +256,24 @@ export function parseZaiQuota(json: unknown): RateLimitData {
   const weekly = windows.find(w => w.ms >= 86_400_000)?.l;
 
   const nowSec = Date.now() / 1000;
+
+  // Reset horizon in seconds. z.ai doesn't always return a reset timestamp for the
+  // 5-hour rolling window (its dashboard only shows the weekly reset), so fall back
+  // to the window's own length (unit × number) — known from the entry — instead of 0.
+  // A non-zero horizon is what the dashboard's prediction chart needs to render.
+  const resetSeconds = (entry?: ZaiLimitEntry): number => {
+    if (!entry) { return 0; }
+    if (entry.nextResetTime) {
+      const s = entry.nextResetTime / 1000 - nowSec;
+      if (s > 0) { return s; }
+    }
+    return ((entry.number ?? 0) * zaiUnitToMs(entry.unit)) / 1000;
+  };
+
   const util5h = five ? clamp01((five.percentage ?? 0) / 100) : 0;
   const util7d = weekly ? clamp01((weekly.percentage ?? 0) / 100) : 0;
-  const resetIn5h = five?.nextResetTime ? Math.max(0, five.nextResetTime / 1000 - nowSec) : 0;
-  const resetIn7d = weekly?.nextResetTime ? Math.max(0, weekly.nextResetTime / 1000 - nowSec) : 0;
+  const resetIn5h = resetSeconds(five);
+  const resetIn7d = resetSeconds(weekly);
   const has7dLimit = weekly !== undefined;
 
   const limitStatus: RateLimitData['limitStatus'] =

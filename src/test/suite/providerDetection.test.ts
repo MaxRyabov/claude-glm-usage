@@ -132,6 +132,19 @@ suite('z.ai quota', () => {
     assert.strictEqual(r.has7dLimit, false);
   });
 
+  test('parseZaiQuota falls back to window length when the 5h reset time is absent', () => {
+    // z.ai often omits nextResetTime for the rolling 5-hour window. resetIn5h must
+    // still be non-zero (≈ 5h) so the dashboard prediction chart can render.
+    const noReset = { code: 200, success: true, data: { limits: [
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 6 },               // no nextResetTime
+      { type: 'TOKENS_LIMIT', unit: 6, number: 7, percentage: 22, nextResetTime: Date.now() + 5 * 86400_000 },
+    ] } };
+    const r = parseZaiQuota(noReset);
+    assert.ok(Math.abs(r.utilization5h - 0.06) < 1e-9);
+    assert.ok(Math.abs(r.resetIn5h - 5 * 3600) < 5, `expected ~18000s, got ${r.resetIn5h}`);
+    assert.ok(r.resetIn7d > 0);
+  });
+
   test('readZaiToken prefers AUTH_TOKEN then API_KEY from settings.json', async () => {
     await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'k-key' } }));
     assert.strictEqual(await readZaiToken(tmpDir), 'k-key');
