@@ -148,11 +148,14 @@ export function activate(context: vscode.ExtensionContext) {
     // graceful degradation: status bar stays in "loading..." state
   });
 
-  // Timer: re-render every 60 seconds from cache
+  // Timer: full periodic refresh every 60 seconds. Uses refresh() (not a bare
+  // getUsageData) so it fires onDidUpdate — updating BOTH the status bar and an open
+  // dashboard — and re-fetches provider quota (z.ai) / rate limits when the cache is
+  // stale. This makes auto-update independent of the file watcher, which is unreliable
+  // for ~/.claude/projects (outside the workspace). API calls remain gated by the cache
+  // TTL + recent-activity check, so idle sessions still don't poll.
   const timer = setInterval(() => {
-    dataManager.getUsageData()
-      .then(data => statusBar.update(data, dataManager.getLastProjectCosts()))
-      .catch(() => {});
+    dataManager.refresh().catch(() => {});
   }, 60_000);
 
   context.subscriptions.push(

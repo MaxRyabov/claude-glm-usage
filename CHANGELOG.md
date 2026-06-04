@@ -11,6 +11,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.7.2] — 2026-06-03
+
+### Fixed
+
+- **Auto-refresh of usage/quota** — the periodic 60-second timer now runs a full `refresh()`
+  (firing `onDidUpdate`) instead of a status-bar-only update, so an open dashboard and the
+  z.ai 5h/weekly quota update on their own. Previously auto-update depended on the file watcher
+  for `~/.claude/projects`, which VS Code watches unreliably outside the workspace — so the
+  counter only moved when you pressed **Refresh**. API calls stay gated by the cache TTL, so
+  idle sessions still don't poll. Lower `claudeStatus.cache.ttlSeconds` (min 60) for more
+  frequent quota updates while actively working.
+
+---
+
 ## [0.7.1] — 2026-06-03
 
 ### Changed
