@@ -7,9 +7,9 @@
 
 <img src="https://raw.githubusercontent.com/MaxRyabov/claude-glm-usage/main/images/icon.png" width="120" alt="Claude Code + GLM Usage icon" />
 
-[![VS Marketplace](https://vsmarketplacebadges.dev/version-short/max-riabov.claude-glm-usage.png)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
-[![Installs](https://vsmarketplacebadges.dev/installs-short/max-riabov.claude-glm-usage.png)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
-[![Rating](https://vsmarketplacebadges.dev/rating-short/max-riabov.claude-glm-usage.png)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
+[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/max-riabov.claude-glm-usage.png?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/max-riabov.claude-glm-usage.png?label=Installs)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/max-riabov.claude-glm-usage.png?label=Rating)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
 
 🌐 [English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 

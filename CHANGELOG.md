@@ -18,8 +18,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Marketplace listing images & badges now render.** The VS Code Marketplace does not render SVG
   images or relative image paths in the README, so the icon and status/badge images were broken on
   the published page. All README images now use absolute `raw.githubusercontent.com` **PNG** URLs,
-  and the shields.io/Open VSX **SVG** badges were replaced with PNG Marketplace badges
-  (`vsmarketplacebadges.dev`).
+  and the badges use shields.io's **`.png`** raster endpoint (SVG badges render on GitHub but not on
+  the Marketplace); the Open VSX badge was dropped until published there.
 - Added a **status-bar screenshot** alongside the dashboard screenshot.
 - Repository renamed to `MaxRyabov/claude-glm-usage`; all repo/issue/clone URLs and the
   `code --install-extension` id updated to `max-riabov.claude-glm-usage`. Repository Issues enabled.
