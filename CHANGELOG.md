@@ -11,6 +11,218 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.1] — 2026-07-08
+
+### Fixed
+
+- **Marketplace listing images & badges now render.** The VS Code Marketplace does not render SVG
+  images or relative image paths in the README, so the icon and status/badge images were broken on
+  the published page. All README images now use absolute `raw.githubusercontent.com` **PNG** URLs,
+  and the badges use shields.io's **`.png`** raster endpoint (SVG badges render on GitHub but not on
+  the Marketplace); the Open VSX badge was dropped until published there.
+- Added a **status-bar screenshot** alongside the dashboard screenshot.
+- Repository renamed to `MaxRyabov/claude-glm-usage`; all repo/issue/clone URLs and the
+  `code --install-extension` id updated to `max-riabov.claude-glm-usage`. Repository Issues enabled.
+
+### Fixed (code review)
+
+- **Rate-limit cache is now provider-specific.** The on-disk cache records which provider produced
+  it (schema v3); after switching Claude.ai ↔ z.ai the UI no longer shows the other provider's
+  utilization until the TTL expires.
+- **Partial `pricing.models` overrides no longer NaN-out costs** — a user override is merged onto the
+  full fallback so missing rate fields can't propagate `NaN` into every total.
+- **Rate-limit notification bucketing hardened** — guards non-finite utilization, anchors buckets to
+  the configured `start` (so custom start/step values aren't mis-bucketed), and always fires the
+  "5h limit reached" alert at 100% even when the step doesn't divide 100.
+- **Dashboard snapshot fails closed on schema drift** (validates `providerType`/`dataSource`/
+  `limitStatus` before use).
+- **Cold start now refreshes the dashboard and notifications**, not just the status bar (uses
+  `refresh()` so `onDidUpdate` fires).
+
+---
+
+## [1.0.0] — 2026-07-08
+
+### Changed
+
+- **Rebrand & Marketplace relaunch as “Claude Code + GLM — Usage & Cost”.** The extension is now
+  positioned around its dual-provider strength: it tracks usage, cost, and rate-limit quota for
+  **both Claude Code and GLM (z.ai)** in one meter. No functional change to the data layer — GLM
+  (z.ai) detection, real quota fetching, and per-model GLM pricing were already present and remain
+  intact.
+  - New extension identity: `name` → `claude-glm-usage`, new publisher, new icon (a dual-arc usage
+    gauge blending Claude coral and GLM blue with a `>_` code caret).
+  - README rewritten to lead with Claude Code + GLM; the z.ai/GLM setup is promoted to a top-level
+    “Two providers, one meter” section. Localized display strings (en/ja/zh) updated.
+  - Settings (`claudeStatus.*`) and command IDs (`vscode-claude-status.*`) are unchanged.
+
+### Housekeeping
+
+- Removed the unused legacy JSONL parse path (superseded by the incremental `entryCache`), the
+  Yeoman scaffold test, and corrected the stale “Chart.js via CDN” note in the docs (Chart.js is
+  bundled locally to `dist/chart-bundle.js`).
+
+### Credits
+
+- Based on [long-910/vscode-claude-status](https://github.com/long-910/vscode-claude-status) (MIT).
+
+---
+
+## [0.9.1] — 2026-07-08
+
+### Fixed
+
+- **Dashboard sections no longer hang on "Loading…".** A `ReferenceError` (`isClaudeAi` left behind
+  by the 0.7.0 provider rename) in the WebView's `updateUsage` aborted every dashboard render after
+  the "Current Usage" labels — project cost, prediction, pricing, and usage history never rendered,
+  and costs / "Last updated" stayed at "—".
+- **Further Extension Host load reduction** (crash hardening on large `~/.claude/projects` trees):
+  - Cold-start parsing is capped at 4 files at a time (previously all session files — hundreds of MB
+    on heavy installs — were read and parsed concurrently) and yields to the event loop every 2 000
+    lines, so the shared Extension Host stays responsive.
+  - Concurrent consumers requesting the same file now share one in-flight parse instead of
+    re-reading the same bytes.
+  - The multi-MB persisted parse cache is only rewritten when its contents actually changed (it was
+    re-serialized with `fsync` twice per refresh, every 60 s, even when idle) and is now stored as
+    compact JSON (~half the size).
+- Usage-history heading rendered as "(90 7 days)" instead of "(90 days)".
+- **Multi-window hardening.** Each VSCode window runs its own extension instance watching the whole
+  `~/.claude/projects` tree, so one long Claude Code session fanned out into continuous work in
+  every open window:
+  - Watcher-triggered refreshes are rate-limited to one per 15 s per window (the 60 s timer already
+    guarantees freshness); the parse cache is persisted at most once per 5 min per window (flushed
+    on deactivate).
+  - The shared dashboard snapshot is filtered to the current window's workspace folders on load —
+    previously a window could briefly render another workspace's project costs after a cold start.
+  - A cross-window file lock (`vscode-claude-status-api.lock`, O_EXCL + stale takeover) ensures only
+    one window polls the rate-limit API when the shared cache TTL expires; the other windows reuse
+    the winner's result from the shared cache instead of each spending a request.
+
+---
+
+## [0.9.0] — 2026-06-05
+
+### Changed
+
+- **Dashboard data loading is dramatically faster, and the file watcher no longer destabilizes the
+  Extension Host.** The usage, project-cost, prediction, and heatmap modules previously each scanned
+  and re-parsed the entire `~/.claude/projects/**/*.jsonl` history on every refresh, and the watcher
+  fired an unbounded, non-coalesced refresh per write event — during a Claude Code streaming response
+  that overloaded the shared Extension Host and forced all extensions (including Claude Code) to
+  reload. Now:
+  - A shared parsed-entry cache (`src/data/entryCache.ts`), keyed by file path + `mtime` + size,
+    parses each JSONL file once and serves all four consumers. Append-only files are parsed
+    **incrementally** (only the newly appended bytes), and a cheap directory-mtime pre-check skips the
+    re-walk when nothing changed. Short-window consumers (30-minute prediction, 7-day usage) filter
+    files by mtime instead of reading the whole history.
+  - The file watcher is **debounced** (a write burst collapses into one refresh), and `refresh()` is
+    **serialized/coalesced** so overlapping refreshes can no longer pile up.
+  - Per-model pricing resolution is memoized per aggregation pass.
+
+### Added
+
+- **Instant cold start.** The last computed dashboard aggregates (usage, project costs, heatmap) are
+  persisted to disk (`vscode-claude-status-snapshot.json`) and rendered immediately on the first panel
+  open, then refreshed in the background. The parse cache is persisted too
+  (`vscode-claude-status-parsecache.json`). All cache writes are now atomic (temp → fsync → rename)
+  to avoid corruption.
+
+---
+
+## [0.8.0] — 2026-06-05
+
+### Changed
+
+- **Rate-limit notifications are now driven by actual quota utilization, not a time prediction.**
+  The old trigger extrapolated a burn rate and capped it at the 5h reset, which fired false alerts
+  near every window reset and produced meaningless estimates for z.ai. Notifications now step off the
+  real `utilization5h` / `utilization7d` fraction and behave identically for every provider:
+  - 5h window: silent below 90% used; a warning on each 2% step (90, 92, 94, 96, 98); a distinct
+    **error** ("5h rate limit reached") at 100%.
+  - 7d window: silent below 80% used; a warning on each 5% step at 80, 85, 90 (capped at 90), only
+    for providers that expose a weekly window.
+  - Each notification shows the percent used and the time until that window resets, and re-arms when
+    the window resets.
+
+### Added
+
+- New configurable thresholds: `notifications.rateLimit5hStartPercent` (90),
+  `…rateLimit5hStepPercent` (2), `…rateLimit7dStartPercent` (80), `…rateLimit7dEndPercent` (90),
+  `…rateLimit7dStepPercent` (5).
+
+### Removed
+
+- `notifications.rateLimitWarningThresholdMinutes` — superseded by the utilization-based thresholds.
+
+---
+
+## [0.7.3] — 2026-06-04
+
+### Fixed
+
+- **z.ai prediction chart not rendering** — z.ai omits a reset timestamp for the rolling
+  5-hour window (its dashboard only shows the weekly reset), so `resetIn5h` was `0`, which hid
+  the dashboard prediction chart and made the exhaustion estimate mis-cap at zero. The reset
+  horizon now falls back to the window's own length (5h / 7d, from the entry's `unit`/`number`)
+  when z.ai doesn't return an explicit reset time.
+
+---
+
+## [0.7.2] — 2026-06-03
+
+### Fixed
+
+- **Auto-refresh of usage/quota** — the periodic 60-second timer now runs a full `refresh()`
+  (firing `onDidUpdate`) instead of a status-bar-only update, so an open dashboard and the
+  z.ai 5h/weekly quota update on their own. Previously auto-update depended on the file watcher
+  for `~/.claude/projects`, which VS Code watches unreliably outside the workspace — so the
+  counter only moved when you pressed **Refresh**. API calls stay gated by the cache TTL, so
+  idle sessions still don't poll. Lower `claudeStatus.cache.ttlSeconds` (min 60) for more
+  frequent quota updates while actively working.
+
+---
+
+## [0.7.1] — 2026-06-03
+
+### Changed
+
+- **z.ai quota auth fallback** — the quota request now tries `Authorization: Bearer <token>`
+  first and falls back to the raw token on a 401/403, so z.ai **coding-plan** keys (which expect
+  the token without the `Bearer` prefix) also return live 5-hour / weekly quota instead of
+  silently dropping to cost-only mode.
+
+---
+
+## [0.7.0] — 2026-06-03
+
+### Added
+
+- **z.ai (GLM) provider support** — when Claude Code is pointed at z.ai (or any custom
+  Anthropic-compatible endpoint) via `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`,
+  the extension now auto-detects the provider (no misleading Anthropic rate-limit calls).
+  New `claudeProvider` values `z-ai` and `custom-endpoint`.
+- **z.ai quota display** — for `z-ai`, the extension fetches the real 5-hour and weekly quota
+  from z.ai's monitor endpoint and shows the same utilization % as the z.ai subscription
+  dashboard (degrades to cost-only when no token is configured or the request fails).
+- **Per-model pricing** — cost is now computed from each entry's `message.model` using a
+  built-in price table (z.ai GLM tiers + Claude tiers), so GLM usage is priced correctly
+  instead of at Claude's ~5–7× higher flat rate, and mixed Claude+GLM usage blends right.
+- **`claudeStatus.pricing.models`** setting — override or add per-model rates, keyed by
+  model name/prefix (e.g. `"glm-4.6"`, `"claude-opus"`).
+
+### Changed
+
+- The flat `claudeStatus.pricing.*` values are now the **fallback** for unknown models;
+  known Claude and GLM models are priced automatically.
+
+### Fixed
+
+- **Project cost over-counting** — per-project cost now deduplicates the multiple JSONL lines
+  Claude Code writes per streaming response (by `requestId`/`message.id`), matching the global
+  total instead of inflating it.
+
+---
+
 ## [0.6.1] — 2026-05-28
 
 ### Added

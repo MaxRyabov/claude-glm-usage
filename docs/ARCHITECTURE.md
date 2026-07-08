@@ -161,7 +161,7 @@ interface ClaudeUsageData {
   tokensCacheCreate5h: number
 
   // Provider type (controls whether % or cost mode is used)
-  providerType: 'claude-ai' | 'aws-bedrock' | 'api-key' | 'unknown'
+  providerType: 'claude-ai' | 'z-ai' | 'custom-endpoint' | 'aws-bedrock' | 'api-key' | 'unknown'
 
   // Metadata
   lastUpdated: Date
@@ -177,7 +177,7 @@ interface ClaudeUsageData {
 | `'api'` | Fresh data from Anthropic API this refresh |
 | `'cache'` | Cache valid (within TTL), no API call needed |
 | `'stale'` | Cache expired or `rateLimitApi.enabled=false`; showing old rate data with `[Xm ago]` |
-| `'local-only'` | Non-claude-ai provider or no cache; cost mode only, no rate % |
+| `'local-only'` | Non-claude-ai provider (Bedrock, API key, z.ai, custom endpoint) or no cache; cost mode only, no rate % |
 | `'no-credentials'` | No credentials / no JSONL data found |
 | `'no-data'` | Credentials OK but no JSONL data yet |
 

@@ -89,7 +89,8 @@ Implement in this order to keep the extension usable at every step:
 - **Lint**: ESLint + `@typescript-eslint`
 - **Build**: webpack (production), tsc (development)
 - **Package**: `@vscode/vsce`
-- **Chart library**: Chart.js (loaded via CDN in WebView, pinned version)
+- **Chart library**: Chart.js — bundled locally into `dist/chart-bundle.js` (webpack `target: 'web'`)
+  and loaded via `asWebviewUri`; **not** a CDN load (the WebView CSP forbids remote scripts)
 
 ---
 

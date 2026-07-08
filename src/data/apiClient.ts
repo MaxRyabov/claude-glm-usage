@@ -15,7 +15,7 @@ interface ClaudeCredentials {
   }
 }
 
-export type ClaudeProvider = 'claude-ai' | 'aws-bedrock' | 'api-key' | 'unknown';
+export type ClaudeProvider = 'claude-ai' | 'z-ai' | 'custom-endpoint' | 'aws-bedrock' | 'api-key' | 'unknown';
 
 export interface RateLimitData {
   utilization5h: number
@@ -26,7 +26,65 @@ export interface RateLimitData {
   has7dLimit: boolean
 }
 
+/**
+ * Read ANTHROPIC_BASE_URL the way Claude Code resolves it: process env first, then
+ * ~/.claude/settings.json, then ~/.claude/settings.local.json (the `env` object).
+ * Claude Code applies settings.json `env` when it launches the CLI, so it is NOT in
+ * the extension host's process.env — we must read the files directly. Reads are
+ * confined to ~/.claude and tolerate missing/malformed files (graceful degradation).
+ */
+export async function readClaudeEnvVar(name: string, claudeDirOverride?: string): Promise<string | null> {
+  const fromEnv = process.env[name];
+  if (fromEnv) { return fromEnv; }
+
+  const claudeDir = claudeDirOverride ?? path.join(os.homedir(), '.claude');
+  for (const file of ['settings.json', 'settings.local.json']) {
+    try {
+      const raw = await fs.readFile(path.join(claudeDir, file), 'utf-8');
+      const parsed = JSON.parse(raw) as { env?: Record<string, string> };
+      const value = parsed?.env?.[name];
+      if (typeof value === 'string' && value.length > 0) { return value; }
+    } catch {
+      // missing or malformed — try the next file
+    }
+  }
+  return null;
+}
+
+export async function readClaudeBaseUrl(claudeDirOverride?: string): Promise<string | null> {
+  return readClaudeEnvVar('ANTHROPIC_BASE_URL', claudeDirOverride);
+}
+
+/** The z.ai auth token Claude Code sends — its API key, under either env name. */
+export async function readZaiToken(claudeDirOverride?: string): Promise<string | null> {
+  return (await readClaudeEnvVar('ANTHROPIC_AUTH_TOKEN', claudeDirOverride))
+    ?? (await readClaudeEnvVar('ANTHROPIC_API_KEY', claudeDirOverride));
+}
+
+/**
+ * Classify a base URL. An Anthropic host (or no URL) returns null so the normal
+ * credential/env probing runs; any other host is a third-party provider.
+ */
+export function classifyBaseUrl(baseUrl: string | null): 'z-ai' | 'custom-endpoint' | null {
+  if (!baseUrl) { return null; }
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return null; // not a parseable URL — ignore
+  }
+  if (host === 'api.anthropic.com' || host.endsWith('.anthropic.com')) { return null; }
+  if (host === 'z.ai' || host.endsWith('.z.ai')) { return 'z-ai'; }
+  return 'custom-endpoint';
+}
+
 export async function detectProvider(customCredPath?: string | null): Promise<ClaudeProvider> {
+  // 0. A custom ANTHROPIC_BASE_URL wins over everything. This must come BEFORE the
+  // credential probe so a stale claudeAiOauth file does not cause a misleading
+  // rate-limit call to api.anthropic.com when the user is actually on z.ai.
+  const customProvider = classifyBaseUrl(await readClaudeBaseUrl());
+  if (customProvider) { return customProvider; }
+
   // 1. Check for OAuth credentials (Claude.ai subscription)
   try {
     await readCredentials(customCredPath);
@@ -123,8 +181,10 @@ export async function fetchRateLimitData(customCredPath?: string | null): Promis
     }),
   });
 
-  const util5h = parseFloat(response.headers.get('anthropic-ratelimit-unified-5h-utilization') ?? '0');
-  const util7d = parseFloat(response.headers.get('anthropic-ratelimit-unified-7d-utilization') ?? '0');
+  // Clamp to the 0..1 contract (cache validation enforces it too); a malformed header
+  // must not surface as a NaN/out-of-range utilization downstream.
+  const util5h = clamp01(parseFloat(response.headers.get('anthropic-ratelimit-unified-5h-utilization') ?? '0'));
+  const util7d = clamp01(parseFloat(response.headers.get('anthropic-ratelimit-unified-7d-utilization') ?? '0'));
   const reset5hStr = response.headers.get('anthropic-ratelimit-unified-5h-reset');
   const reset7dStr = response.headers.get('anthropic-ratelimit-unified-7d-reset');
   // Status header value is "allowed" or "denied" (not a boolean)
@@ -148,4 +208,108 @@ export async function fetchRateLimitData(customCredPath?: string | null): Promis
   }
 
   return { utilization5h: util5h, utilization7d: util7d, resetIn5h, resetIn7d, limitStatus, has7dLimit };
+}
+
+// --- z.ai quota -------------------------------------------------------------
+// z.ai exposes the same 5-hour + weekly quota shown on its subscription dashboard
+// via an internal monitor endpoint (undocumented but stable; used by several usage
+// trackers). data.limits[] holds TOKENS_LIMIT entries with a `percentage` (0–100)
+// and `nextResetTime` (epoch ms); unit/number describe the window (5 hours vs 7 days).
+const ZAI_QUOTA_PATH = '/api/monitor/usage/quota/limit';
+
+interface ZaiLimitEntry {
+  type?: string
+  unit?: number
+  number?: number
+  percentage?: number
+  nextResetTime?: number | null
+}
+
+interface ZaiQuotaResponse {
+  code?: number
+  success?: boolean
+  data?: { limits?: ZaiLimitEntry[] }
+}
+
+// unit codes vary across z.ai plans; map to a duration so we can tell the short
+// (5-hour) window from the long (weekly) one regardless of the exact code.
+function zaiUnitToMs(unit?: number): number {
+  switch (unit) {
+    case 5: return 60_000;            // minutes
+    case 3: return 3_600_000;         // hours
+    case 1: case 2: case 6: return 86_400_000; // days
+    default: return 3_600_000;
+  }
+}
+
+function clamp01(n: number): number {
+  if (!isFinite(n) || n < 0) { return 0; }
+  return n > 1 ? 1 : n;
+}
+
+export function parseZaiQuota(json: unknown): RateLimitData {
+  const resp = (json ?? {}) as ZaiQuotaResponse;
+  const limits = Array.isArray(resp.data?.limits) ? resp.data!.limits! : [];
+  const tokenLimits = limits.filter(l => l?.type === 'TOKENS_LIMIT');
+
+  const windows = tokenLimits.map(l => ({ l, ms: (l.number ?? 0) * zaiUnitToMs(l.unit) }));
+  // Short window (< 1 day) is the 5-hour quota; long window is the weekly quota.
+  const five = windows.find(w => w.ms < 86_400_000)?.l ?? windows[0]?.l;
+  const weekly = windows.find(w => w.ms >= 86_400_000)?.l;
+
+  const nowSec = Date.now() / 1000;
+
+  // Reset horizon in seconds. z.ai doesn't always return a reset timestamp for the
+  // 5-hour rolling window (its dashboard only shows the weekly reset), so fall back
+  // to the window's own length (unit × number) — known from the entry — instead of 0.
+  // A non-zero horizon is what the dashboard's prediction chart needs to render.
+  const resetSeconds = (entry?: ZaiLimitEntry): number => {
+    if (!entry) { return 0; }
+    if (entry.nextResetTime) {
+      const s = entry.nextResetTime / 1000 - nowSec;
+      if (s > 0) { return s; }
+    }
+    return ((entry.number ?? 0) * zaiUnitToMs(entry.unit)) / 1000;
+  };
+
+  const util5h = five ? clamp01((five.percentage ?? 0) / 100) : 0;
+  const util7d = weekly ? clamp01((weekly.percentage ?? 0) / 100) : 0;
+  const resetIn5h = resetSeconds(five);
+  const resetIn7d = resetSeconds(weekly);
+  const has7dLimit = weekly !== undefined;
+
+  const limitStatus: RateLimitData['limitStatus'] =
+    (util5h >= 0.75 || (has7dLimit && util7d >= 0.75)) ? 'allowed_warning' : 'allowed';
+
+  return { utilization5h: util5h, utilization7d: util7d, resetIn5h, resetIn7d, limitStatus, has7dLimit };
+}
+
+export async function fetchZaiQuota(
+  baseUrl: string,
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<RateLimitData> {
+  // Derive the monitor host from the configured base URL's origin so this works
+  // for api.z.ai as well as regional/coding-plan hosts.
+  const origin = new URL(baseUrl).origin;
+  const url = origin + ZAI_QUOTA_PATH;
+
+  // Standard plans accept `Bearer <token>`; z.ai coding-plan endpoints accept the
+  // token directly. Try Bearer first, then fall back to the raw token on 401/403.
+  const authVariants = [`Bearer ${token}`, token];
+  let lastStatus = 0;
+  for (const authorization of authVariants) {
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      headers: { 'Authorization': authorization, 'Accept': 'application/json' },
+    });
+    if (response.ok) {
+      return parseZaiQuota(await response.json());
+    }
+    lastStatus = response.status;
+    if (response.status !== 401 && response.status !== 403) {
+      break; // non-auth error — retrying with a different token format won't help
+    }
+  }
+  throw new Error(`z.ai quota request failed (HTTP ${lastStatus})`);
 }

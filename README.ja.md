@@ -1,30 +1,28 @@
-# vscode-claude-status
+# Claude Code + GLM — 使用量とコスト
 
-> Claude Code のトークン使用量とコスト — VS Code のステータスバーに常時表示。
-
-![vscode-claude-status social preview](https://repository-images.githubusercontent.com/1165729413/1dc1fbe5-b0d9-45f9-9b5b-c5ad06e36d10)
+> **Claude Code** と **GLM (z.ai)** のトークン使用量・コスト・レート制限クォータを
+> VS Code のステータスバーに常時表示。
 
 <div align="center">
 
-[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/long-kudo.vscode-claude-status?style=flat-square&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=long-kudo.vscode-claude-status)
-[![Open VSX](https://img.shields.io/open-vsx/v/long-kudo/vscode-claude-status?style=flat-square&label=Open%20VSX)](https://open-vsx.org/extension/long-kudo/vscode-claude-status)
-[![Downloads](https://img.shields.io/visual-studio-marketplace/d/long-kudo.vscode-claude-status?style=flat-square&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=long-kudo.vscode-claude-status)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/long-kudo.vscode-claude-status?style=flat-square&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=long-kudo.vscode-claude-status)
-[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.73.0-007ACC?style=flat-square)](https://code.visualstudio.com/)
+<img src="https://raw.githubusercontent.com/MaxRyabov/claude-glm-usage/main/images/icon.png" width="120" alt="Claude Code + GLM Usage icon" />
 
-[![License: MIT](https://img.shields.io/github/license/long-910/vscode-claude-status?style=flat-square)](LICENSE)
-[![CI](https://github.com/long-910/vscode-claude-status/actions/workflows/ci.yml/badge.svg)](https://github.com/long-910/vscode-claude-status/actions/workflows/ci.yml)
-[![Release](https://github.com/long-910/vscode-claude-status/actions/workflows/release.yml/badge.svg)](https://github.com/long-910/vscode-claude-status/actions/workflows/release.yml)
-[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-pink?logo=github)](https://github.com/sponsors/long-910)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/long910)
+[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/max-riabov.claude-glm-usage.png?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/max-riabov.claude-glm-usage.png?label=Installs)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/max-riabov.claude-glm-usage.png?label=Rating)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
 
 🌐 [English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
 </div>
 
+> **Claude Code** と **GLM (z.ai)** の両方をファーストクラスのプロバイダーとしてサポートし、
+> `~/.claude/settings.json` からどちらを使用中か自動検出します。GLM 使用時は z.ai の実クォータを
+> 表示し、各エントリを `message.model` ごとに GLM 料金で正確に計算します。詳細は
+> [English README](README.md) を参照してください。
+
 ## 概要
 
-**vscode-claude-status** は、エディタを離れることなく [Claude Code](https://claude.ai/code) の使用状況をリアルタイムで監視できる Visual Studio Code 拡張機能です。
+**Claude Code + GLM — Usage & Cost** は、エディタを離れることなく [Claude Code](https://claude.ai/code) と GLM (z.ai) の使用状況をリアルタイムで監視できる Visual Studio Code 拡張機能です。
 
 `~/.claude/projects/` からローカルでセッションデータを読み取り、レート制限の使用率ヘッダーを取得するために最大5分に1回だけ Anthropic API に問い合わせます。トークンコストはすべて設定可能なレートを使用してクライアント側で計算されます（デフォルト: Claude Sonnet 4.x 料金）。
 
@@ -83,7 +81,9 @@ VS Code ステータスバーにピン留めされたリアルタイム使用状
 パネルはVS Codeのライト・ダーク・ハイコントラストテーマをネイティブにサポートします。
 
 <div align="center">
-<img width="574" alt="ダッシュボード スクリーンショット" src="https://raw.githubusercontent.com/long-910/vscode-claude-status/main/docs/screenshots/dashboard.png" />
+<img width="820" alt="ステータスバー" src="https://raw.githubusercontent.com/MaxRyabov/claude-glm-usage/main/docs/screenshots/statusbar.png" />
+<br /><br />
+<img width="574" alt="ダッシュボード スクリーンショット" src="https://raw.githubusercontent.com/MaxRyabov/claude-glm-usage/main/docs/screenshots/dashboard.png" />
 </div>
 
 ### 🗂 プロジェクトレベルのコスト追跡 *(VS Code専用)*
@@ -145,7 +145,7 @@ Claude Status: Set Budget...
 
 > **注意：** この拡張機能は、作者が **Claude.ai Pro プラン**（5時間・7日間の両レート制限ウィンドウを持つ）で開発・テストしています。
 >
-> AWS Bedrock、直接APIキー、Claude.ai Free、5時間ウィンドウのみのプランなど、その他のプランやプロバイダーは自動検出によるベストエフォートでサポートされています。お使いのプランで予期しない動作が発生した場合は、[Issueを開いて](https://github.com/long-910/vscode-claude-status/issues)プランの種類をお知らせください。迅速に対応します。
+> AWS Bedrock、直接APIキー、Claude.ai Free、5時間ウィンドウのみのプランなど、その他のプランやプロバイダーは自動検出によるベストエフォートでサポートされています。お使いのプランで予期しない動作が発生した場合は、[Issueを開いて](https://github.com/MaxRyabov/claude-glm-usage/issues)プランの種類をお知らせください。迅速に対応します。
 
 **プランタイプ別の動作：**
 
@@ -167,21 +167,21 @@ Claude Status: Set Budget...
 拡張機能パネルで **「Claude Status」** を検索するか：
 
 ```bash
-code --install-extension long-kudo.vscode-claude-status
+code --install-extension max-riabov.claude-glm-usage
 ```
 
 ### VSIXからインストール
 
-1. [Releases](https://github.com/long-910/vscode-claude-status/releases) ページから `.vsix` をダウンロード。
+1. [Releases](https://github.com/MaxRyabov/claude-glm-usage/releases) ページから `.vsix` をダウンロード。
 2. VS Codeで: **拡張機能 (Ctrl+Shift+X)** → **⋯** → **VSIXからインストール…**
 
 ### ソースからビルド
 
 ```bash
-git clone https://github.com/long-910/vscode-claude-status.git
-cd vscode-claude-status
+git clone https://github.com/MaxRyabov/claude-glm-usage.git
+cd claude-glm-usage
 npm install
-npm run package       # → vscode-claude-status-*.vsix
+npm run package       # → claude-glm-usage-*.vsix
 ```
 
 ---
@@ -222,11 +222,17 @@ npm run package       # → vscode-claude-status-*.vsix
 | `claudeStatus.notifications.budgetWarning` | `boolean` | `true` | 予算閾値超過時に警告 |
 | `claudeStatus.heatmap.days` | `30 \| 60 \| 90` | `90` | 使用ヒートマップに表示する日数 |
 | `claudeStatus.credentials.path` | `string \| null` | `null` | カスタム認証情報ファイルパス |
-| `claudeStatus.claudeProvider` | `"auto"` \| `"claude-ai"` \| `"aws-bedrock"` \| `"api-key"` | `"auto"` | プロバイダータイプ（自動検出または明示的指定） |
-| `claudeStatus.pricing.inputPerMillion` | `number` | `3.00` | 入力トークン 1M あたりの USD 単価 |
-| `claudeStatus.pricing.outputPerMillion` | `number` | `15.00` | 出力トークン 1M あたりの USD 単価 |
-| `claudeStatus.pricing.cacheReadPerMillion` | `number` | `0.30` | キャッシュ読み取りトークン 1M あたりの USD 単価 |
-| `claudeStatus.pricing.cacheCreatePerMillion` | `number` | `3.75` | キャッシュ作成トークン 1M あたりの USD 単価 |
+| `claudeStatus.claudeProvider` | `"auto"` \| `"claude-ai"` \| `"z-ai"` \| `"custom-endpoint"` \| `"aws-bedrock"` \| `"api-key"` | `"auto"` | プロバイダータイプ（自動検出または明示的指定） |
+| `claudeStatus.pricing.inputPerMillion` | `number` | `3.00` | 不明なモデル用のフォールバック入力トークン 1M あたりの USD 単価 |
+| `claudeStatus.pricing.outputPerMillion` | `number` | `15.00` | 不明なモデル用のフォールバック出力トークン 1M あたりの USD 単価 |
+| `claudeStatus.pricing.cacheReadPerMillion` | `number` | `0.30` | 不明なモデル用のフォールバックキャッシュ読み取りトークン 1M あたりの USD 単価 |
+| `claudeStatus.pricing.cacheCreatePerMillion` | `number` | `3.75` | 不明なモデル用のフォールバックキャッシュ作成トークン 1M あたりの USD 単価 |
+| `claudeStatus.pricing.models` | `object` | `{}` | モデル名/プレフィックス（例: `"glm-4.6"`、`"claude-opus"`）ごとの価格上書き |
+
+> **z.ai（GLM）**: `~/.claude/settings.json` の `env.ANTHROPIC_BASE_URL` を
+> `https://api.z.ai/api/anthropic` に設定すると、プロバイダーを自動検出し、z.ai の
+> 5時間／週間クォータ（サブスク画面と同じ利用率%）を表示し、各エントリを `message.model` から
+> GLM 料金表で計算します。トークンが無い場合はコストのみ表示にフォールバックします。
 
 ```jsonc
 // 設定例: settings.json
@@ -288,10 +294,14 @@ npm run package       # → vscode-claude-status-*.vsix
 
 このプロジェクトに貢献してくださった方々に感謝します！
 
-[![Contributors](https://contrib.rocks/image?repo=long-910/vscode-claude-status&exclude=dependabot%5Bbot%5D)](https://github.com/long-910/vscode-claude-status/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=MaxRyabov/claude-glm-usage&exclude=dependabot%5Bbot%5D)](https://github.com/MaxRyabov/claude-glm-usage/graphs/contributors)
 
 ---
 
+## クレジット
+
+本プロジェクトは [long-910/vscode-claude-status](https://github.com/long-910/vscode-claude-status)（MIT）を基に、**Claude Code + GLM (z.ai)** のデュアルサポートを軸にリブランド・再構成したものです。オリジナル作者に深く感謝します。
+
 ## ライセンス
 
-[MIT](LICENSE) — © 2026 long-910
+[MIT](LICENSE)

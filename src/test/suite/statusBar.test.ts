@@ -128,4 +128,21 @@ suite('StatusBar', () => {
     const tooltip = buildTooltip(makeData({ dataSource: 'no-credentials' }));
     assert.ok(tooltip.includes('not logged in') || tooltip.includes('Not logged'), tooltip);
   });
+
+  test('z-ai provider uses cost mode in the label (no rate %)', () => {
+    const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'local-only', cost5h: 1.23, cost7d: 10 }));
+    assert.ok(label.includes('5h:$1.23'), `Expected cost in: ${label}`);
+    assert.ok(!label.includes('%'), `Expected no rate percentage in: ${label}`);
+  });
+
+  test('z-ai provider tooltip shows the Z.AI label and hides the rate-limit window', () => {
+    const tooltip = buildTooltip(makeData({ providerType: 'z-ai', dataSource: 'local-only' }));
+    assert.ok(tooltip.includes('Z.AI / GLM'), `Expected Z.AI label in tooltip:\n${tooltip}`);
+    assert.ok(!tooltip.includes('5h window'), `Expected no rate-limit window for z-ai:\n${tooltip}`);
+  });
+
+  test('custom-endpoint provider shows its label in the tooltip', () => {
+    const tooltip = buildTooltip(makeData({ providerType: 'custom-endpoint', dataSource: 'local-only' }));
+    assert.ok(tooltip.includes('Custom endpoint'), `Expected custom-endpoint label in tooltip:\n${tooltip}`);
+  });
 });

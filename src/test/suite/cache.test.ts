@@ -6,8 +6,9 @@ import { isCacheValid, getCacheAge, validateCacheFile, writeCache } from '../../
 
 // Minimal CacheFile shape for testing (without importing private type)
 interface TestCacheFile {
-  version: 2
+  version: 3
   updatedAt: string
+  providerType: string
   usageData: {
     utilization5h: number
     utilization7d: number
@@ -21,8 +22,9 @@ function makeCache(ageSeconds: number): TestCacheFile {
   const updatedAt = new Date(Date.now() - ageSeconds * 1000).toISOString();
   const nowSec = Date.now() / 1000;
   return {
-    version: 2,
+    version: 3,
     updatedAt,
+    providerType: 'claude-ai',
     usageData: {
       utilization5h: 0.5,
       utilization7d: 0.3,
@@ -57,13 +59,26 @@ suite('Cache', () => {
 });
 
 suite('validateCacheFile (M-2)', () => {
-  test('accepts a well-formed v2 cache', () => {
+  test('accepts a well-formed v3 cache', () => {
     assert.ok(validateCacheFile(makeCache(10)) !== null);
   });
 
   test('rejects a wrong version', () => {
     const c = makeCache(10) as unknown as Record<string, unknown>;
     c.version = 1;
+    assert.strictEqual(validateCacheFile(c), null);
+  });
+
+  test('rejects a v2 cache lacking providerType', () => {
+    const c = makeCache(10) as unknown as Record<string, unknown>;
+    c.version = 2;
+    delete c.providerType;
+    assert.strictEqual(validateCacheFile(c), null);
+  });
+
+  test('rejects a missing/empty providerType', () => {
+    const c = makeCache(10) as unknown as Record<string, unknown>;
+    delete c.providerType;
     assert.strictEqual(validateCacheFile(c), null);
   });
 
@@ -130,7 +145,7 @@ suite('writeCache permissions (M-1)', () => {
       resetIn7d: 86400,
       limitStatus: 'allowed',
       has7dLimit: true,
-    });
+    }, 'claude-ai');
     const mode = fs.statSync(cachePath).mode & 0o777;
     assert.strictEqual(mode, 0o600, `expected 0600, got ${mode.toString(8)}`);
   });

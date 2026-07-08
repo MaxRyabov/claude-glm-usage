@@ -13,8 +13,15 @@ What the status bar and dashboard show, depending on your Claude plan and key se
 | You use… | `claudeProvider` (auto-detected) |
 |----------|----------------------------------|
 | Claude.ai subscription (Pro / Max) | `claude-ai` |
+| z.ai (GLM) via `ANTHROPIC_BASE_URL=https://api.z.ai/...` | `z-ai` |
+| Other custom Anthropic-compatible `ANTHROPIC_BASE_URL` | `custom-endpoint` |
 | AWS Bedrock | `aws-bedrock` |
 | Anthropic API key (`ANTHROPIC_API_KEY`) | `api-key` |
+
+> Detection reads `ANTHROPIC_BASE_URL` from `process.env`, then `~/.claude/settings.json`,
+> then `~/.claude/settings.local.json` — and a non-Anthropic base URL takes priority over a
+> (possibly stale) `claudeAiOauth` credentials file, so z.ai users never trigger an Anthropic
+> rate-limit call.
 
 ### Step 2 — What you see
 
@@ -27,6 +34,9 @@ What the status bar and dashboard show, depending on your Claude plan and key se
 | `claude-ai` | any | `false` + no cache | any | `🤖 5h:$0.00 7d:$0.00` | ❌ Not shown |
 | `aws-bedrock` | — | — | — | `🤖 5h:$14.21 7d:$53.17` | ❌ Not shown (no rate limits) |
 | `api-key` | — | — | — | `🤖 5h:$14.21 7d:$53.17` | ❌ Not shown (no rate limits) |
+| `z-ai` | — | `true` (default) + token | `percent` (default) | `🤖 5h:6% 7d:22%` (real z.ai quota) | ✅ Both windows |
+| `z-ai` | — | `true` + no token / fetch fails | — | `🤖 5h:$2.10 7d:$8.40` (per-GLM-model pricing) | ❌ Not shown (cost-only fallback) |
+| `custom-endpoint` | — | — | — | `🤖 5h:$2.10 7d:$8.40` | ❌ Not shown (no rate limits) |
 
 ### Step 3 — Recommended settings per use case
 
@@ -117,12 +127,44 @@ What the status bar and dashboard show, depending on your Claude plan and key se
     "description": "Show notification when rate limit is approaching."
   },
 
-  "claudeStatus.notifications.rateLimitWarningThresholdMinutes": {
+  "claudeStatus.notifications.rateLimit5hStartPercent": {
     "type": "number",
-    "default": 30,
-    "minimum": 5,
-    "maximum": 120,
-    "description": "Show rate limit warning this many minutes before exhaustion."
+    "default": 90,
+    "minimum": 0,
+    "maximum": 100,
+    "description": "Start notifying once the 5h rate limit is at least this percent used."
+  },
+
+  "claudeStatus.notifications.rateLimit5hStepPercent": {
+    "type": "number",
+    "default": 2,
+    "minimum": 1,
+    "maximum": 50,
+    "description": "After the 5h start threshold, notify on each step of this many percent (e.g. 90, 92, 94…)."
+  },
+
+  "claudeStatus.notifications.rateLimit7dStartPercent": {
+    "type": "number",
+    "default": 80,
+    "minimum": 0,
+    "maximum": 100,
+    "description": "Start notifying once the 7d (weekly) rate limit is at least this percent used."
+  },
+
+  "claudeStatus.notifications.rateLimit7dEndPercent": {
+    "type": "number",
+    "default": 90,
+    "minimum": 0,
+    "maximum": 100,
+    "description": "Stop adding new 7d notifications above this percent (the cap)."
+  },
+
+  "claudeStatus.notifications.rateLimit7dStepPercent": {
+    "type": "number",
+    "default": 5,
+    "minimum": 1,
+    "maximum": 50,
+    "description": "Between the 7d start and end thresholds, notify on each step of this many percent (e.g. 80, 85, 90)."
   },
 
   "claudeStatus.notifications.budgetWarning": {

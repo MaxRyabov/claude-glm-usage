@@ -1,5 +1,5 @@
-import * as fs from 'fs/promises';
-import { findAllJsonlFiles, calculateCost, TokenUsage } from './jsonlReader';
+import { calculateCost } from './jsonlReader';
+import { discoverFiles, loadEntries } from './entryCache';
 
 export type RecommendationKey = 'safe' | 'caution' | 'warning' | 'critical' | 'rate-limit-reached';
 
@@ -24,30 +24,14 @@ async function readRecentCosts(windowMs: number): Promise<TimestampedCost[]> {
   const cutoff = now - windowMs;
   const result: TimestampedCost[] = [];
 
-  const files = await findAllJsonlFiles();
-  for (const file of files) {
-    try {
-      const content = await fs.readFile(file, 'utf-8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) { continue; }
-        try {
-          const obj = JSON.parse(trimmed) as Record<string, unknown>;
-          if (obj.type !== 'assistant' || typeof obj.timestamp !== 'string') { continue; }
-          const ts = new Date(obj.timestamp).getTime();
-          if (isNaN(ts) || ts < cutoff) { continue; }
-          const msg = obj.message as { usage?: Partial<TokenUsage> } | undefined;
-          if (!msg?.usage) { continue; }
-          const cost = calculateCost({
-            input_tokens: msg.usage.input_tokens ?? 0,
-            output_tokens: msg.usage.output_tokens ?? 0,
-            cache_read_input_tokens: msg.usage.cache_read_input_tokens ?? 0,
-            cache_creation_input_tokens: msg.usage.cache_creation_input_tokens ?? 0,
-          });
-          if (cost > 0) { result.push({ timestamp: ts, cost }); }
-        } catch { /* skip malformed lines */ }
-      }
-    } catch { /* skip unreadable files */ }
+  // Only files modified within the window can hold entries in it — typically the single
+  // active session file, not the whole history.
+  const files = await discoverFiles(cutoff);
+  const entries = await loadEntries(files);
+  for (const entry of entries) {
+    if (entry.timestamp < cutoff) { continue; }
+    const cost = calculateCost(entry.usage);
+    if (cost > 0) { result.push({ timestamp: entry.timestamp, cost }); }
   }
 
   return result.sort((a, b) => a.timestamp - b.timestamp);

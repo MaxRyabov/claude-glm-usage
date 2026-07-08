@@ -1,0 +1,35 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Dark rounded-square background -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#26263a"/>
+      <stop offset="1" stop-color="#16161f"/>
+    </linearGradient>
+    <!-- Dual-provider arc: Claude coral -> z.ai/GLM blue -->
+    <linearGradient id="gauge" x1="48" y1="200" x2="208" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D97757"/>
+      <stop offset="0.5" stop-color="#B07A9E"/>
+      <stop offset="1" stop-color="#4D6BFE"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="51.5" fill="none" stroke="#ffffff" stroke-opacity="0.06"/>
+
+  <!-- Gauge track (full 270deg sweep, unused portion) -->
+  <path d="M 71 191 A 80 80 0 1 1 185 191"
+        fill="none" stroke="#ffffff" stroke-opacity="0.10"
+        stroke-width="20" stroke-linecap="round"/>
+
+  <!-- Gauge fill: ~75% of the sweep, Claude coral -> GLM blue -->
+  <path d="M 71 191 A 80 80 0 1 1 196 145"
+        fill="none" stroke="url(#gauge)"
+        stroke-width="20" stroke-linecap="round"/>
+
+  <!-- Terminal caret ">_" = Code, centred inside the gauge -->
+  <g stroke="#ffffff" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="104,100 132,128 104,156"/>
+    <line x1="140" y1="156" x2="168" y2="156"/>
+  </g>
+</svg>

@@ -2,7 +2,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode';
-import { calculateCost, TokenUsage, TokenPricing, DEFAULT_PRICING } from './jsonlReader';
+import { calculateCost, PricingContext, createPricingResolver } from './pricing';
+import { loadEntries } from './entryCache';
 
 export interface ProjectCostData {
   projectName: string
@@ -76,7 +77,7 @@ export async function workspacePathToProjectDir(workspacePath: string): Promise<
   return null;
 }
 
-async function getProjectCostForDir(projectDir: string, projectName: string, pricing: TokenPricing = DEFAULT_PRICING): Promise<ProjectCostData> {
+export async function getProjectCostForDir(projectDir: string, projectName: string, ctx: PricingContext = {}): Promise<ProjectCostData> {
   const now = Date.now();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -87,53 +88,32 @@ async function getProjectCostForDir(projectDir: string, projectName: string, pri
   let cost7d = 0;
   let cost30d = 0;
   let sessionCount = 0;
-  let lastActive: Date | null = null;
+  let lastActiveMs = 0;
+
+  const priceFor = createPricingResolver(ctx);
 
   try {
-    const files = await fs.readdir(projectDir);
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) { continue; }
-      sessionCount++;
+    const dirFiles = await fs.readdir(projectDir);
+    const jsonlFiles = dirFiles.filter((f) => f.endsWith('.jsonl'));
+    sessionCount = jsonlFiles.length;
 
-      const content = await fs.readFile(path.join(projectDir, file), 'utf-8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) { continue; }
-        try {
-          const entry = JSON.parse(trimmed) as Record<string, unknown>;
-          if (entry.type !== 'assistant') { continue; }
-          if (typeof entry.timestamp !== 'string') { continue; }
+    // Entries come from the shared cache (parsed once, deduped by requestId/message.id).
+    const entries = await loadEntries(jsonlFiles.map((f) => path.join(projectDir, f)));
+    for (const entry of entries) {
+      const tsMs = entry.timestamp;
+      const cost = calculateCost(entry.usage, priceFor(entry.model));
+      const ageMs = now - tsMs;
 
-          const msg = entry.message as Record<string, unknown> | undefined;
-          const rawUsage = msg?.usage as Record<string, number> | undefined;
-          if (!rawUsage) { continue; }
-
-          const usage: TokenUsage = {
-            input_tokens: rawUsage.input_tokens || 0,
-            output_tokens: rawUsage.output_tokens || 0,
-            cache_read_input_tokens: rawUsage.cache_read_input_tokens || 0,
-            cache_creation_input_tokens: rawUsage.cache_creation_input_tokens || 0,
-          };
-
-          const ts = new Date(entry.timestamp as string);
-          const tsMs = ts.getTime();
-          if (isNaN(tsMs)) { continue; }
-
-          const cost = calculateCost(usage, pricing);
-          const ageMs = now - tsMs;
-
-          if (ageMs < w30d) { cost30d += cost; }
-          if (ageMs < w7d) { cost7d += cost; }
-          if (tsMs >= todayStart.getTime()) { costToday += cost; }
-          if (!lastActive || ts > lastActive) { lastActive = ts; }
-        } catch {
-          // skip malformed lines
-        }
-      }
+      if (ageMs < w30d) { cost30d += cost; }
+      if (ageMs < w7d) { cost7d += cost; }
+      if (tsMs >= todayStart.getTime()) { costToday += cost; }
+      if (tsMs > lastActiveMs) { lastActiveMs = tsMs; }
     }
   } catch {
     // graceful degradation
   }
+
+  const lastActive = lastActiveMs > 0 ? new Date(lastActiveMs) : null;
 
   return {
     projectName,
@@ -146,7 +126,7 @@ async function getProjectCostForDir(projectDir: string, projectName: string, pri
   };
 }
 
-export async function getAllProjectCosts(pricing: TokenPricing = DEFAULT_PRICING): Promise<ProjectCostData[]> {
+export async function getAllProjectCosts(ctx: PricingContext = {}): Promise<ProjectCostData[]> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) { return []; }
 
@@ -156,7 +136,7 @@ export async function getAllProjectCosts(pricing: TokenPricing = DEFAULT_PRICING
       const projectDir = await workspacePathToProjectDir(workspacePath);
       if (!projectDir) { return null; }
       const projectName = path.basename(workspacePath);
-      return getProjectCostForDir(projectDir, projectName, pricing);
+      return getProjectCostForDir(projectDir, projectName, ctx);
     })
   );
 

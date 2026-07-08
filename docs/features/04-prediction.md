@@ -105,25 +105,38 @@ if (dailyBudget !== null) {
 
 ### VSCode Notifications
 
-Use `vscode.window.showWarningMessage` / `showErrorMessage`:
+Rate-limit notifications are driven by the **actual quota utilization** of each window
+(`utilization5h` / `utilization7d`), not by the time-to-exhaustion prediction. The prediction is
+still computed and shown in the dashboard, but it no longer triggers alerts — see
+[`notificationDecision.ts`](../../src/data/notificationDecision.ts) for the pure decision logic.
+
+Stepped behavior (thresholds are configurable, see [SETTINGS.md](../SETTINGS.md)):
+
+- **5h window** — silent below 90% used; a **warning** on each 2% step (90, 92, 94, 96, 98); a
+  distinct **error** ("5h rate limit reached", with *Open Dashboard*) at 100%.
+- **7d window** — silent below 80% used; a **warning** on each 5% step at 80, 85, 90 (capped at 90),
+  only when the provider exposes a 7d window (`has7dLimit`).
+
+Each step is shown at most once per window and re-arms when that window resets. Only the current
+(highest) step per window is emitted, since utilization is monotonic within a window.
 
 ```typescript
-async function checkAndNotify(prediction: PredictionData, config: ExtensionConfig) {
-  const { estimatedExhaustionIn } = prediction
-
-  if (estimatedExhaustionIn !== null) {
-    if (estimatedExhaustionIn < 600 && !wasNotified('ratelimit-critical')) {
-      const action = await vscode.window.showErrorMessage(
-        `Claude Code: Rate limit in ~${Math.round(estimatedExhaustionIn / 60)} min`,
-        'Open Dashboard', 'Dismiss'
-      )
-      if (action === 'Open Dashboard') openDashboard()
-      markNotified('ratelimit-critical')
-    } else if (estimatedExhaustionIn < 1800 && !wasNotified('ratelimit-warning')) {
-      vscode.window.showWarningMessage(
-        `Claude Code: Rate limit in ~${Math.round(estimatedExhaustionIn / 60)} min`
-      )
-      markNotified('ratelimit-warning')
+async function checkAndNotify(data: ClaudeUsageData, config: ExtensionConfig) {
+  if (config.rateLimitWarning) {
+    for (const n of decideRateLimitNotifications(data, config.rateLimitThresholds, notifiedKeys)) {
+      markNotified(n.key) // mark before await to prevent duplicates
+      const reset = formatDuration(n.resetIn)
+      if (n.reached) {
+        const action = await vscode.window.showErrorMessage(
+          `Claude Code: 5h rate limit reached — resets in ${reset}`,
+          'Open Dashboard', 'Dismiss'
+        )
+        if (action === 'Open Dashboard') openDashboard()
+      } else {
+        vscode.window.showWarningMessage(
+          `Claude Code: ${n.window} limit ${n.percentUsed}% used — resets in ${reset}`
+        )
+      }
     }
   }
 
@@ -142,15 +155,18 @@ async function checkAndNotify(prediction: PredictionData, config: ExtensionConfi
 
 ### Notification Deduplication
 
-Notifications must not repeat within a single session window.
-Use an in-memory `Set<string>` of notified keys, cleared when the 5h window resets.
+Notifications must not repeat within a single window. Use an in-memory `Set<string>` of notified
+keys, namespaced per window (`5h-92`, `7d-85`). Keys for a window are cleared when that window
+resets, so each step re-arms exactly once per fresh window.
 
 ```typescript
 const notifiedKeys = new Set<string>()
 
-function wasNotified(key: string): boolean { return notifiedKeys.has(key) }
 function markNotified(key: string): void { notifiedKeys.add(key) }
-function onWindowReset(): void { notifiedKeys.clear() }
+function clearWindowKeys(prefix: string): void {
+  for (const key of notifiedKeys) if (key.startsWith(prefix)) notifiedKeys.delete(key)
+}
+// On a 5h rollover: clearWindowKeys('5h-'); on a 7d rollover: clearWindowKeys('7d-')
 ```
 
 ---

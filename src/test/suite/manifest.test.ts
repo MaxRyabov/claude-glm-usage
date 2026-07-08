@@ -19,4 +19,18 @@ suite('package.json manifest hardening', () => {
       'chart.js must be listed in dependencies',
     );
   });
+
+  test('claudeProvider enum includes z-ai and custom-endpoint', () => {
+    const setting = pkg.contributes.configuration.properties['claudeStatus.claudeProvider'];
+    assert.ok(setting.enum.includes('z-ai'), 'enum must include z-ai');
+    assert.ok(setting.enum.includes('custom-endpoint'), 'enum must include custom-endpoint');
+    // enumDescriptions must stay aligned with enum length
+    assert.strictEqual(setting.enum.length, setting.enumDescriptions.length);
+  });
+
+  test('pricing.models per-model override setting is declared', () => {
+    const setting = pkg.contributes.configuration.properties['claudeStatus.pricing.models'];
+    assert.ok(setting, 'claudeStatus.pricing.models must exist');
+    assert.strictEqual(setting.type, 'object');
+  });
 });

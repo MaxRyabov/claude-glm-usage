@@ -37,8 +37,20 @@ Each line is a JSON object. Relevant fields (verified against Claude Code v2.1.x
 
 ### Cost Calculation
 
-Default rates are based on Claude Sonnet 4.x pricing.
-**All four rates are user-configurable** via `claudeStatus.pricing.*` settings.
+Cost is computed **per model**: each JSONL entry's `message.model` is resolved to a
+`TokenPricing` by `resolvePricing()` in [`src/data/pricing.ts`](../src/data/pricing.ts).
+Resolution precedence:
+
+1. `claudeStatus.pricing.models` override (keyed by model name/prefix) →
+2. built-in `MODEL_PRICING` table (z.ai GLM tiers + Claude tiers, longest-prefix match) →
+3. provider default (`z-ai` → GLM-4.7 rates) →
+4. the flat `claudeStatus.pricing.*` fallback below.
+
+`<synthetic>`, empty models, and free flash tiers resolve to zero. This means GLM usage is
+priced at GLM rates, Claude usage at Claude rates, and mixed usage blends correctly.
+
+The flat `claudeStatus.pricing.*` settings are the **fallback for unknown models** (defaults
+based on Claude Sonnet 4.x):
 
 | Token type | Setting key | Default (USD / 1M) |
 |------------|-------------|-------------------|

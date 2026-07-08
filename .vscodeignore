@@ -18,3 +18,5 @@ docs/**
 openspec/**
 tsconfig.webview.json
 *.vsix
+CLAUDE.md
+images/icon.svg

@@ -36,6 +36,7 @@ function buildI18n(): Record<string, string> {
     tokenCost:             t('Token Cost'),
     today:                 t('Today'),
     days7:                 t('7 days'),
+    daysUnit:              t('days'),
     days7short:            t('7d'),
     days30:                t('30 days'),
     monthEst:              t('Month (est.)'),
@@ -493,7 +494,7 @@ export function getWebviewContent(
   <!-- Usage History (Feature 05) -->
   <div class="card">
     <div class="card-title">
-      ${i18n.usageHistory} (<span id="heatmap-days">90</span> ${i18n.days7})
+      ${i18n.usageHistory} (<span id="heatmap-days">90</span> ${i18n.daysUnit})
     </div>
     <div id="heatmap-content">
       <div class="placeholder">${i18n.loadingHistory}</div>
@@ -553,7 +554,10 @@ export function getWebviewContent(
       }
     }
 
-    // sync: formatDuration.ts — keep this inline JS in sync with src/webview/formatDuration.ts
+    // sync: formatDuration.ts — this inline JS is an intentional plain-JS copy of the typed
+    // formatDuration() in src/webview/formatDuration.ts (which cannot be imported into this
+    // HTML string). Keep the rollover logic identical; behaviour is covered by
+    // src/test/suite/formatDuration.test.ts. Change both together.
     function fmt(seconds) {
       function r2(tmpl, a, b) { return tmpl.replace('__N__', String(a)).replace('__N2__', String(b)); }
       if (seconds < 3600) {
@@ -580,16 +584,17 @@ export function getWebviewContent(
 
     function updateUsage(usage, mode) {
       const denied = usage.limitStatus === 'denied';
-      const isClaudeAi = usage.providerType === 'claude-ai';
-      const useCostMode = !isClaudeAi || usage.dataSource === 'local-only' || mode === 'cost';
-      const show7d = usage.has7dLimit && isClaudeAi;
+      const supportsRateLimit = usage.providerType === 'claude-ai' || usage.providerType === 'z-ai';
+      const hasRateData = supportsRateLimit && usage.dataSource !== 'local-only';
+      const useCostMode = !hasRateData || mode === 'cost';
+      const show7d = usage.has7dLimit && hasRateData;
 
       // Show/hide 7d row
       const row7d = document.getElementById('usage-7d-row');
       if (row7d) { row7d.style.display = show7d ? '' : 'none'; }
 
       if (useCostMode) {
-        const resetSuffix5h = isClaudeAi && usage.resetIn5h > 0
+        const resetSuffix5h = hasRateData && usage.resetIn5h > 0
           ? ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h) : '';
         document.getElementById('usage-5h-label').textContent =
           '$' + usage.cost5h.toFixed(2) + resetSuffix5h;
@@ -611,7 +616,7 @@ export function getWebviewContent(
       }
 
       const fill5h = document.getElementById('usage-5h-fill');
-      if (isClaudeAi) {
+      if (hasRateData) {
         fill5h.style.width = Math.min(100, usage.utilization5h * 100) + '%';
         fill5h.className = 'progress-fill' +
           (denied ? ' error' : usage.utilization5h >= 0.75 ? ' warning' : '');
@@ -898,6 +903,8 @@ export function getWebviewContent(
 
       const providerLabel = {
         'claude-ai': 'Claude.ai',
+        'z-ai': 'Z.AI / GLM',
+        'custom-endpoint': 'Custom endpoint',
         'aws-bedrock': 'AWS Bedrock',
         'api-key': 'API Key',
       }[settings.provider] || settings.provider;
@@ -942,7 +949,7 @@ export function getWebviewContent(
       const canvas = document.getElementById('predChart');
       if (!canvas) { return; }
 
-      const isClaudeAi = usage && usage.providerType === 'claude-ai';
+      const isClaudeAi = usage && (usage.providerType === 'claude-ai' || usage.providerType === 'z-ai') && usage.dataSource !== 'local-only';
       const hasUtil    = usage && usage.utilization5h > 0 && usage.resetIn5h > 0;
 
       if (!isClaudeAi || !hasUtil || typeof Chart === 'undefined') {
@@ -1291,8 +1298,12 @@ export class DashboardPanel {
 
   private handleMessage(msg: { type: string; amount?: number | null }): void {
     switch (msg.type) {
-      case 'ready':
-        // Fast first update (usage + prediction, cached heatmap or null)
+      case 'ready': {
+        // Instant render from the last-known (on-disk snapshot) data if we have it, so the
+        // panel never sits on "Loading…" while the live re-parse runs.
+        const last = this.dataManager.getLastData();
+        if (last) { this.sendUpdate(last).catch(() => {}); }
+        // Fast first live update (usage + prediction, cached heatmap or null)
         this.dataManager.getUsageData().then(data => this.sendUpdate(data)).catch(() => {});
         // Trigger heatmap computation; send a second update when ready
         if (!this.dataManager.getLastHeatmapData()) {
@@ -1302,6 +1313,7 @@ export class DashboardPanel {
           }).catch(() => {});
         }
         break;
+      }
 
       case 'refresh':
         this.dataManager.forceRefresh().catch(() => {});

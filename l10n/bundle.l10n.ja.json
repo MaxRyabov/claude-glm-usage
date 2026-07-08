@@ -1,5 +1,7 @@
 {
-  "Claude Code: Rate limit in ~{0} min": "Claude Code: レート制限まで約{0}分",
+  "Claude Code: 5h limit {0}% used — resets in {1}": "Claude Code: 5時間制限を {0}% 使用 — {1}後にリセット",
+  "Claude Code: 5h rate limit reached — resets in {0}": "Claude Code: 5時間レート制限に到達 — {0}後にリセット",
+  "Claude Code: 7d limit {0}% used — resets in {1}": "Claude Code: 7日間制限を {0}% 使用 — {1}後にリセット",
   "Open Dashboard": "ダッシュボードを開く",
   "Dismiss": "閉じる",
   "Claude Code: Daily budget {0}% used (${1} / ${2})": "Claude Code: 日次予算 {0}% 使用済み (${1} / ${2})",
@@ -18,6 +20,7 @@
   "Project: {0}": "プロジェクト: {0}",
   "Today": "今日",
   "7 days": "7日間",
+  "days": "日間",
   "Last updated: {0}": "最終更新: {0}",
   "Click to open dashboard →": "クリックしてダッシュボードを開く →",
   "AWS Bedrock": "AWS Bedrock",

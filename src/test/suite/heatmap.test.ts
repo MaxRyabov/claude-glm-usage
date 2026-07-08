@@ -1,12 +1,6 @@
 import * as assert from 'assert';
 import { aggregateByDay, aggregateByHour, EntryForHeatmap } from '../../webview/heatmap';
 
-// Helper: create a fake entry at `hoursAgo` hours before now
-function makeEntry(hoursAgo: number, cost = 0.01, hour?: number): EntryForHeatmap {
-  const ts = Date.now() - hoursAgo * 3600 * 1000;
-  return { timestamp: ts, cost, tokens: 1000, hour: hour ?? new Date(ts).getHours() };
-}
-
 suite('Heatmap', () => {
 
   suite('aggregateByDay', () => {
@@ -25,10 +19,16 @@ suite('Heatmap', () => {
     });
 
     test('aggregates costs for active days', () => {
+      // Anchor to local noon (not "N hours ago") so the test is deterministic regardless
+      // of when it runs — "2 hours ago" lands on the previous day when run just after midnight.
+      const noonToday = new Date(); noonToday.setHours(12, 0, 0, 0);
+      const noonYesterday = new Date(noonToday); noonYesterday.setDate(noonYesterday.getDate() - 1);
+      const at = (d: Date, cost: number): EntryForHeatmap =>
+        ({ timestamp: d.getTime(), cost, tokens: 1000, hour: d.getHours() });
       const entries = [
-        makeEntry(2, 0.10),   // 2 hours ago → today
-        makeEntry(3, 0.20),   // 3 hours ago → today
-        makeEntry(25, 0.05),  // 25 hours ago → yesterday
+        at(noonToday, 0.10),      // today
+        at(noonToday, 0.20),      // today
+        at(noonYesterday, 0.05),  // yesterday
       ];
       const result = aggregateByDay(entries, 7);
       const today = result[result.length - 1];

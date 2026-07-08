@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ClaudeProvider } from './data/apiClient';
 import type { TokenPricing } from './data/jsonlReader';
+import type { RateLimitThresholds } from './data/notificationDecision';
 
 export class ExtensionConfig {
   private get cfg() {
@@ -47,8 +48,15 @@ export class ExtensionConfig {
     return this.cfg.get('notifications.rateLimitWarning', true);
   }
 
-  get rateLimitWarningThresholdMinutes(): number {
-    return this.cfg.get('notifications.rateLimitWarningThresholdMinutes', 30);
+  /** Step thresholds (in percent) driving the utilization-based rate-limit notifications. */
+  get rateLimitThresholds(): RateLimitThresholds {
+    return {
+      fiveHourStartPercent: this.cfg.get('notifications.rateLimit5hStartPercent', 90),
+      fiveHourStepPercent: this.cfg.get('notifications.rateLimit5hStepPercent', 2),
+      sevenDayStartPercent: this.cfg.get('notifications.rateLimit7dStartPercent', 80),
+      sevenDayEndPercent: this.cfg.get('notifications.rateLimit7dEndPercent', 90),
+      sevenDayStepPercent: this.cfg.get('notifications.rateLimit7dStepPercent', 5),
+    };
   }
 
   get budgetWarning(): boolean {
@@ -74,6 +82,10 @@ export class ExtensionConfig {
       cacheReadPerMillion:  this.cfg.get('pricing.cacheReadPerMillion', 0.30),
       cacheCreatePerMillion: this.cfg.get('pricing.cacheCreatePerMillion', 3.75),
     };
+  }
+
+  get pricingModels(): Record<string, TokenPricing> {
+    return this.cfg.get('pricing.models', {});
   }
 
   async setDisplayMode(mode: 'percent' | 'cost'): Promise<void> {
