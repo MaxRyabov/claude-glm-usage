@@ -157,15 +157,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Cold start: render the last on-disk snapshot immediately (marked stale), then do a
   // live load in the background. loadFromDisk() fires onDidUpdate, so the status bar and any
-  // open dashboard render at once without waiting for a full JSONL re-parse.
+  // open dashboard render at once without waiting for a full JSONL re-parse. The follow-up
+  // uses refresh() (not a bare getUsageData) so it also fires onDidUpdate — refreshing the
+  // dashboard and running checkAndNotify on the fresh data, not just the status bar.
   dataManager.loadFromDisk()
-    .then(() => Promise.all([
-      dataManager.getUsageData(),
-      dataManager.refreshProjectCosts(),
-    ]))
-    .then(([data]) => {
-      statusBar.update(data, dataManager.getLastProjectCosts());
-    })
+    .then(() => dataManager.refresh())
     .catch(() => {
       // graceful degradation: status bar stays in "loading..." state
     });

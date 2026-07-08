@@ -53,12 +53,21 @@ export function bucketFor(
   cap?: number,
 ): number | null {
   if (step <= 0) { return null; }
+  // Guard against malformed utilization (NaN / Infinity) so we never emit a
+  // '5h-NaN' bucket or a nonsensical notification.
+  if (!Number.isFinite(percent)) { return null; }
   // utilization*100 introduces float error (e.g. 0.98*100 = 97.9999…); nudge by a tiny
   // epsilon so values sitting on a step boundary land in the correct bucket.
   const EPS = 1e-9;
   if (percent < start - EPS) { return null; }
+  // Uncapped window (5h) fully consumed → always surface a clean 100 bucket, regardless
+  // of whether `step` evenly divides 100. Otherwise a custom step (e.g. 3) would floor
+  // percent=100 down to 99 and the "5h rate limit reached" alert would never fire.
+  if (cap === undefined && percent >= 100 - EPS) { return 100; }
   const capped = cap !== undefined ? Math.min(percent, cap) : percent;
-  return Math.floor((capped + EPS) / step) * step;
+  // Anchor buckets to `start` (not 0) so arbitrary user-configured start/step combos still
+  // land on the intended step sequence and never report a bucket below the configured start.
+  return start + Math.floor((capped - start + EPS) / step) * step;
 }
 
 /**

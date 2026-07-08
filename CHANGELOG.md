@@ -24,6 +24,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Repository renamed to `MaxRyabov/claude-glm-usage`; all repo/issue/clone URLs and the
   `code --install-extension` id updated to `max-riabov.claude-glm-usage`. Repository Issues enabled.
 
+### Fixed (code review)
+
+- **Rate-limit cache is now provider-specific.** The on-disk cache records which provider produced
+  it (schema v3); after switching Claude.ai ↔ z.ai the UI no longer shows the other provider's
+  utilization until the TTL expires.
+- **Partial `pricing.models` overrides no longer NaN-out costs** — a user override is merged onto the
+  full fallback so missing rate fields can't propagate `NaN` into every total.
+- **Rate-limit notification bucketing hardened** — guards non-finite utilization, anchors buckets to
+  the configured `start` (so custom start/step values aren't mis-bucketed), and always fires the
+  "5h limit reached" alert at 100% even when the step doesn't divide 100.
+- **Dashboard snapshot fails closed on schema drift** (validates `providerType`/`dataSource`/
+  `limitStatus` before use).
+- **Cold start now refreshes the dashboard and notifications**, not just the status bar (uses
+  `refresh()` so `onDidUpdate` fires).
+
 ---
 
 ## [1.0.0] — 2026-07-08

@@ -181,8 +181,10 @@ export async function fetchRateLimitData(customCredPath?: string | null): Promis
     }),
   });
 
-  const util5h = parseFloat(response.headers.get('anthropic-ratelimit-unified-5h-utilization') ?? '0');
-  const util7d = parseFloat(response.headers.get('anthropic-ratelimit-unified-7d-utilization') ?? '0');
+  // Clamp to the 0..1 contract (cache validation enforces it too); a malformed header
+  // must not surface as a NaN/out-of-range utilization downstream.
+  const util5h = clamp01(parseFloat(response.headers.get('anthropic-ratelimit-unified-5h-utilization') ?? '0'));
+  const util7d = clamp01(parseFloat(response.headers.get('anthropic-ratelimit-unified-7d-utilization') ?? '0'));
   const reset5hStr = response.headers.get('anthropic-ratelimit-unified-5h-reset');
   const reset7dStr = response.headers.get('anthropic-ratelimit-unified-7d-reset');
   // Status header value is "allowed" or "denied" (not a boolean)

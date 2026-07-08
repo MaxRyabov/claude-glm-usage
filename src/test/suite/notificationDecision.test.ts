@@ -50,6 +50,21 @@ suite('NotificationDecision', () => {
     test('returns null for non-positive step', () => {
       assert.strictEqual(bucketFor(95, 90, 0), null);
     });
+    test('returns null for non-finite utilization (NaN / Infinity)', () => {
+      assert.strictEqual(bucketFor(NaN, 90, 2), null);
+      assert.strictEqual(bucketFor(Infinity, 90, 2), null);
+    });
+    test('forces a clean 100 bucket for a full uncapped window even when step ∤ 100', () => {
+      // step=3 does not divide 100: without the 100-force the bucket would floor to 99
+      // and the "5h rate limit reached" alert (bucket >= 100) would never fire.
+      assert.strictEqual(bucketFor(100, 90, 3), 100);
+    });
+    test('anchors buckets to start for non-default start/step (never below start)', () => {
+      // start=82 is not a multiple of step=5; the first bucket must be 82, not 80.
+      assert.strictEqual(bucketFor(82, 82, 5), 82);
+      assert.strictEqual(bucketFor(86, 82, 5), 82);
+      assert.strictEqual(bucketFor(87, 82, 5), 87);
+    });
   });
 
   suite('5h window', () => {

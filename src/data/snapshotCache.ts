@@ -55,6 +55,15 @@ export async function readSnapshot(): Promise<DashboardSnapshot | null> {
     if (typeof file.usage.cost5h !== 'number' || typeof file.usage.utilization5h !== 'number') {
       return null;
     }
+    // Fail closed on schema drift: reject an older/renamed snapshot whose required
+    // discriminator fields are missing or mistyped, rather than letting `undefined`
+    // flow into the UI (mirrors validateCacheFile's strictness for the rate-limit cache).
+    const u = file.usage as unknown as Record<string, unknown>;
+    if (typeof u.providerType !== 'string' ||
+        typeof u.dataSource !== 'string' ||
+        typeof u.limitStatus !== 'string') {
+      return null;
+    }
 
     const usage: ClaudeUsageData = {
       ...file.usage,

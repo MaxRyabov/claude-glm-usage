@@ -5,8 +5,13 @@ import { RateLimitData } from './apiClient';
 import { atomicWriteJson } from './atomicWrite';
 
 interface CacheFile {
-  version: 2
+  version: 3
   updatedAt: string
+  // Which provider produced this rate-limit/quota snapshot. The cache is shared across
+  // providers, so a consumer must only reuse it when it matches the active provider —
+  // otherwise switching claude-ai ↔ z-ai would surface the other provider's utilization
+  // until the TTL expired.
+  providerType: string
   usageData: {
     utilization5h: number
     utilization7d: number
@@ -31,8 +36,9 @@ export function validateCacheFile(data: unknown): CacheFile | null {
   if (!data || typeof data !== 'object') { return null; }
   const d = data as Record<string, unknown>;
 
-  if (d.version !== 2) { return null; }  // v1 caches used relative times; reject them
+  if (d.version !== 3) { return null; }  // v1 (relative times) / v2 (no providerType) are rejected
   if (typeof d.updatedAt !== 'string' || isNaN(new Date(d.updatedAt).getTime())) { return null; }
+  if (typeof d.providerType !== 'string' || d.providerType.length === 0) { return null; }
 
   const u = d.usageData;
   if (!u || typeof u !== 'object') { return null; }
@@ -59,11 +65,12 @@ export async function readCache(): Promise<CacheFile | null> {
   }
 }
 
-export async function writeCache(data: RateLimitData): Promise<void> {
+export async function writeCache(data: RateLimitData, providerType: string): Promise<void> {
   const nowSec = Date.now() / 1000;
   const cache: CacheFile = {
-    version: 2,
+    version: 3,
     updatedAt: new Date().toISOString(),
+    providerType,
     usageData: {
       utilization5h: data.utilization5h,
       utilization7d: data.utilization7d,

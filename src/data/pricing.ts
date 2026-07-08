@@ -112,8 +112,11 @@ export function resolvePricing(model: string | undefined, ctx: PricingContext = 
 
   if (!norm || norm === '<synthetic>') { return ZERO_PRICING; }
 
+  // Merge onto the fallback so a partial user override (e.g. only inputPerMillion —
+  // the pricing.models schema marks no field required) never leaves a rate undefined,
+  // which would multiply into NaN in calculateCost and poison every downstream total.
   const override = matchLongestPrefix(norm, ctx.userOverrides);
-  if (override) { return override; }
+  if (override) { return { ...fallback, ...override }; }
 
   const builtin = matchLongestPrefix(norm, MODEL_PRICING, MODEL_PRICING_KEYS);
   if (builtin) { return builtin; }

@@ -54,6 +54,22 @@ suite('resolvePricing', () => {
     assert.strictEqual(p.inputPerMillion, 99);
   });
 
+  test('partial user override merges onto fallback (no undefined → NaN rates)', () => {
+    // pricing.models marks no field required, so a user may save only inputPerMillion.
+    const partial = { inputPerMillion: 42 } as unknown as TokenPricing;
+    const p = resolvePricing('glm-4.6', { userOverrides: { 'glm-4.6': partial } });
+    assert.strictEqual(p.inputPerMillion, 42);                                   // override wins
+    assert.strictEqual(p.outputPerMillion, DEFAULT_PRICING.outputPerMillion);    // filled from fallback
+    assert.strictEqual(p.cacheReadPerMillion, DEFAULT_PRICING.cacheReadPerMillion);
+    assert.strictEqual(p.cacheCreatePerMillion, DEFAULT_PRICING.cacheCreatePerMillion);
+    // calculateCost must never see undefined → NaN
+    const cost = calculateCost(
+      { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      p,
+    );
+    assert.ok(Number.isFinite(cost) && cost > 0, `expected finite cost, got ${cost}`);
+  });
+
   test('z-ai provider default applies to unknown models', () => {
     const p = resolvePricing('mystery-model', { providerType: 'z-ai' });
     assert.strictEqual(p.inputPerMillion, 0.60);   // GLM-4.7 default tier

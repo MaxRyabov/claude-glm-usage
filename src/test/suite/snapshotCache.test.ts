@@ -62,4 +62,12 @@ suite('snapshotCache', () => {
     await fsp.writeFile(snapshotPath, JSON.stringify({ version: 999, garbage: true }), 'utf-8');
     assert.strictEqual(await readSnapshot(), null);
   });
+
+  maybe('fails closed when a required discriminator field is missing (schema drift)', async () => {
+    const usage = makeUsage() as unknown as Record<string, unknown>;
+    delete usage.providerType;   // simulate an older-schema snapshot
+    const file = { version: 1, savedAt: new Date().toISOString(), usage, projectCosts: [], heatmap: null };
+    await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
+    assert.strictEqual(await readSnapshot(), null);
+  });
 });

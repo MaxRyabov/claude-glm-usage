@@ -116,7 +116,11 @@ export class DataManager {
   async getUsageData(forceRefresh = false): Promise<ClaudeUsageData> {
     // Resolve the provider first: it gates the rate-limit call AND drives per-model
     // pricing, so it must be known before reading local usage.
-    const [cache, providerType] = await Promise.all([readCache(), this.resolveProvider()]);
+    const [cacheRaw, providerType] = await Promise.all([readCache(), this.resolveProvider()]);
+    // The rate-limit/quota cache is shared on disk but provider-specific: only reuse it
+    // when it was produced by the currently active provider, otherwise a stale claude-ai
+    // cache could surface z.ai's utilization (and vice-versa) until the TTL expired.
+    const cache = cacheRaw && cacheRaw.providerType === providerType ? cacheRaw : null;
     const localUsage = await readAllUsage(this.pricingContext(providerType));
 
     let rateLimitData: RateLimitData | null = null;
@@ -142,7 +146,8 @@ export class DataManager {
           try {
             // Double-check under the lock: another window may have finished its poll
             // between our cache read and the acquire — its result is already fresh.
-            const fresh = forceRefresh ? null : await readCache();
+            const freshRaw = forceRefresh ? null : await readCache();
+            const fresh = freshRaw && freshRaw.providerType === providerType ? freshRaw : null;
             if (fresh && isCacheValid(fresh, config.cacheTtlSeconds)) {
               rateLimitData = this.cacheToRateLimitData(fresh.usageData);
               dataSource = 'cache';
@@ -150,7 +155,7 @@ export class DataManager {
               rateLimitData = providerType === 'z-ai'
                 ? await this.fetchZaiRateLimit()
                 : await fetchRateLimitData(config.credentialsPath);
-              await writeCache(rateLimitData);
+              await writeCache(rateLimitData, providerType);
               dataSource = 'api';
             }
           } catch {
