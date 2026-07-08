@@ -1,5 +1,7 @@
 {
-  "Claude Code: Rate limit in ~{0} min": "Claude Code: 速率限制约剩 {0} 分钟",
+  "Claude Code: 5h limit {0}% used — resets in {1}": "Claude Code: 5 小时限制已使用 {0}% — {1} 后重置",
+  "Claude Code: 5h rate limit reached — resets in {0}": "Claude Code: 已达到 5 小时速率限制 — {0} 后重置",
+  "Claude Code: 7d limit {0}% used — resets in {1}": "Claude Code: 7 天限制已使用 {0}% — {1} 后重置",
   "Open Dashboard": "打开仪表板",
   "Dismiss": "关闭",
   "Claude Code: Daily budget {0}% used (${1} / ${2})": "Claude Code: 日预算已用 {0}% (${1} / ${2})",
@@ -18,6 +20,7 @@
   "Project: {0}": "项目：{0}",
   "Today": "今日",
   "7 days": "7 天",
+  "days": "天",
   "Last updated: {0}": "最后更新：{0}",
   "Click to open dashboard →": "点击打开仪表板 →",
   "AWS Bedrock": "AWS Bedrock",

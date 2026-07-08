@@ -1,6 +1,5 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import * as os from 'os';
 import {
   TokenUsage,
   TokenPricing,
@@ -8,10 +7,20 @@ import {
   PricingContext,
   calculateCost,
   resolvePricing,
+  createPricingResolver,
 } from './pricing';
+import {
+  discoverFiles,
+  loadEntries,
+  getClaudeProjectsDir,
+  isSafePath,
+} from './entryCache';
 
 // Re-export the pricing primitives so existing importers keep working unchanged.
 export { TokenUsage, TokenPricing, DEFAULT_PRICING, PricingContext, calculateCost, resolvePricing };
+// Re-export the path helpers (moved to entryCache to break the import cycle) so existing
+// importers/tests that pull them from this module keep working unchanged.
+export { getClaudeProjectsDir, isSafePath };
 
 // Actual Claude Code JSONL structure (verified against real data):
 // - type: 'assistant' entries contain usage data
@@ -39,21 +48,6 @@ export interface AggregatedUsage {
   tokensOut5h: number
   tokensCacheRead5h: number
   tokensCacheCreate5h: number
-}
-
-export function getClaudeProjectsDir(): string {
-  return path.join(os.homedir(), '.claude', 'projects');
-}
-
-/**
- * Confirm a path stays inside ~/.claude/projects/ (M-3). Defends against path
- * traversal (e.g. a symlink resolving elsewhere) so JSONL discovery never reads
- * files outside the projects directory.
- */
-export function isSafePath(filePath: string): boolean {
-  const resolved = path.resolve(filePath);
-  const allowedRoot = path.resolve(getClaudeProjectsDir());
-  return resolved.startsWith(allowedRoot + path.sep);
 }
 
 export async function findAllJsonlFiles(): Promise<string[]> {
@@ -151,31 +145,29 @@ export async function readAllUsage(ctx: PricingContext = {}): Promise<Aggregated
     tokensCacheCreate5h: 0,
   };
 
-  const files = await findAllJsonlFiles();
-  for (const file of files) {
-    const entries = await readJsonlFile(file);
-    for (const entry of entries) {
-      const ts = new Date(entry.timestamp).getTime();
-      if (isNaN(ts)) { continue; }
+  // Only the last 7 days matter for any window here, so skip files untouched since then.
+  const files = await discoverFiles(now - window7d);
+  const entries = await loadEntries(files);
+  const priceFor = createPricingResolver(ctx);
 
-      const usage = entry.message?.usage;
-      if (!usage) { continue; }
-      const cost = calculateCost(usage, resolvePricing(entry.message?.model, ctx));
+  for (const entry of entries) {
+    const ts = entry.timestamp;
+    const usage = entry.usage;
+    const cost = calculateCost(usage, priceFor(entry.model));
 
-      const age = now - ts;
-      if (age <= window7d) {
-        result.cost7d += cost;
-      }
-      if (ts >= startOfToday.getTime()) {
-        result.costDay += cost;
-      }
-      if (age <= window5h) {
-        result.cost5h += cost;
-        result.tokensIn5h += usage.input_tokens || 0;
-        result.tokensOut5h += usage.output_tokens || 0;
-        result.tokensCacheRead5h += usage.cache_read_input_tokens || 0;
-        result.tokensCacheCreate5h += usage.cache_creation_input_tokens || 0;
-      }
+    const age = now - ts;
+    if (age <= window7d) {
+      result.cost7d += cost;
+    }
+    if (ts >= startOfToday.getTime()) {
+      result.costDay += cost;
+    }
+    if (age <= window5h) {
+      result.cost5h += cost;
+      result.tokensIn5h += usage.input_tokens || 0;
+      result.tokensOut5h += usage.output_tokens || 0;
+      result.tokensCacheRead5h += usage.cache_read_input_tokens || 0;
+      result.tokensCacheCreate5h += usage.cache_creation_input_tokens || 0;
     }
   }
 
@@ -183,15 +175,8 @@ export async function readAllUsage(ctx: PricingContext = {}): Promise<Aggregated
 }
 
 export async function wasJsonlUpdatedRecently(seconds: number): Promise<boolean> {
-  const files = await findAllJsonlFiles();
-  const threshold = Date.now() - seconds * 1000;
-  for (const file of files) {
-    try {
-      const stat = await fs.stat(file);
-      if (stat.mtimeMs >= threshold) { return true; }
-    } catch {
-      // skip
-    }
-  }
-  return false;
+  // Reuse the cached directory walk + mtime window from entryCache: any file in the
+  // window means there was recent activity.
+  const recent = await discoverFiles(Date.now() - seconds * 1000);
+  return recent.length > 0;
 }

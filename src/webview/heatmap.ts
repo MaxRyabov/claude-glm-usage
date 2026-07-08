@@ -1,7 +1,5 @@
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
-import { calculateCost, TokenUsage, PricingContext, resolvePricing } from '../data/pricing';
+import { calculateCost, PricingContext, createPricingResolver } from '../data/pricing';
+import { discoverFiles, loadEntries } from '../data/entryCache';
 
 export interface DailyUsage {
   date: string        // "YYYY-MM-DD" local time
@@ -37,43 +35,6 @@ function toLocalDateKey(ts: number): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
-}
-
-async function readJsonlForHeatmap(
-  filePath: string,
-  cutoff: number,
-  ctx: PricingContext,
-): Promise<EntryForHeatmap[]> {
-  const result: EntryForHeatmap[] = [];
-  try {
-    const content = await fs.readFile(filePath, 'utf-8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) { continue; }
-      try {
-        const obj = JSON.parse(trimmed) as Record<string, unknown>;
-        if (obj.type !== 'assistant' || typeof obj.timestamp !== 'string') { continue; }
-        const ts = new Date(obj.timestamp).getTime();
-        if (isNaN(ts) || ts < cutoff) { continue; }
-        const msg = obj.message as { model?: string; usage?: Partial<TokenUsage> } | undefined;
-        if (!msg?.usage) { continue; }
-        const u = msg.usage;
-        const cost = calculateCost({
-          input_tokens: u.input_tokens ?? 0,
-          output_tokens: u.output_tokens ?? 0,
-          cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
-          cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
-        }, resolvePricing(msg.model, ctx));
-        result.push({
-          timestamp: ts,
-          cost,
-          tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
-          hour: new Date(ts).getHours(),
-        });
-      } catch { /* skip malformed lines */ }
-    }
-  } catch { /* skip unreadable files */ }
-  return result;
 }
 
 // ---- aggregation (exported for tests) --------------------------------------
@@ -119,37 +80,23 @@ export function aggregateByHour(entries: EntryForHeatmap[], days: number): Hourl
 // ---- main entry point -------------------------------------------------------
 
 export async function getHeatmapData(days = 90, ctx: PricingContext = {}): Promise<HeatmapData> {
-  const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
   const cutoff = Date.now() - days * 24 * 3600 * 1000;
+  const priceFor = createPricingResolver(ctx);
+
+  // Files modified within the window, from the shared cache (parsed once across consumers).
+  const files = await discoverFiles(cutoff);
+  const entries = await loadEntries(files);
+
   const allEntries: EntryForHeatmap[] = [];
-
-  try {
-    const projectDirs = await fs.readdir(claudeProjectsDir);
-
-    // Collect qualifying JSONL files (mtime filter for performance)
-    const filePaths: string[] = [];
-    for (const dir of projectDirs) {
-      const dirPath = path.join(claudeProjectsDir, dir);
-      try {
-        const dstat = await fs.stat(dirPath);
-        if (!dstat.isDirectory() || dstat.mtimeMs < cutoff) { continue; }
-        const files = await fs.readdir(dirPath);
-        for (const file of files) {
-          if (!file.endsWith('.jsonl')) { continue; }
-          const fp = path.join(dirPath, file);
-          try {
-            const fstat = await fs.stat(fp);
-            if (fstat.mtimeMs >= cutoff) { filePaths.push(fp); }
-          } catch { /* skip */ }
-        }
-      } catch { /* skip unreadable project dirs */ }
-    }
-
-    // Read all qualifying files in parallel
-    const chunks = await Promise.all(filePaths.map(fp => readJsonlForHeatmap(fp, cutoff, ctx)));
-    for (const chunk of chunks) { allEntries.push(...chunk); }
-
-  } catch { /* ~/.claude/projects doesn't exist — return empty data */ }
+  for (const e of entries) {
+    if (e.timestamp < cutoff) { continue; }
+    allEntries.push({
+      timestamp: e.timestamp,
+      cost: calculateCost(e.usage, priceFor(e.model)),
+      tokens: (e.usage.input_tokens || 0) + (e.usage.output_tokens || 0),
+      hour: new Date(e.timestamp).getHours(),
+    });
+  }
 
   return {
     daily: aggregateByDay(allEntries, days),

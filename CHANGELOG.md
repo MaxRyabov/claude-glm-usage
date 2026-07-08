@@ -11,6 +11,94 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.1] — 2026-07-08
+
+### Fixed
+
+- **Dashboard sections no longer hang on "Loading…".** A `ReferenceError` (`isClaudeAi` left behind
+  by the 0.7.0 provider rename) in the WebView's `updateUsage` aborted every dashboard render after
+  the "Current Usage" labels — project cost, prediction, pricing, and usage history never rendered,
+  and costs / "Last updated" stayed at "—".
+- **Further Extension Host load reduction** (crash hardening on large `~/.claude/projects` trees):
+  - Cold-start parsing is capped at 4 files at a time (previously all session files — hundreds of MB
+    on heavy installs — were read and parsed concurrently) and yields to the event loop every 2 000
+    lines, so the shared Extension Host stays responsive.
+  - Concurrent consumers requesting the same file now share one in-flight parse instead of
+    re-reading the same bytes.
+  - The multi-MB persisted parse cache is only rewritten when its contents actually changed (it was
+    re-serialized with `fsync` twice per refresh, every 60 s, even when idle) and is now stored as
+    compact JSON (~half the size).
+- Usage-history heading rendered as "(90 7 days)" instead of "(90 days)".
+- **Multi-window hardening.** Each VSCode window runs its own extension instance watching the whole
+  `~/.claude/projects` tree, so one long Claude Code session fanned out into continuous work in
+  every open window:
+  - Watcher-triggered refreshes are rate-limited to one per 15 s per window (the 60 s timer already
+    guarantees freshness); the parse cache is persisted at most once per 5 min per window (flushed
+    on deactivate).
+  - The shared dashboard snapshot is filtered to the current window's workspace folders on load —
+    previously a window could briefly render another workspace's project costs after a cold start.
+  - A cross-window file lock (`vscode-claude-status-api.lock`, O_EXCL + stale takeover) ensures only
+    one window polls the rate-limit API when the shared cache TTL expires; the other windows reuse
+    the winner's result from the shared cache instead of each spending a request.
+
+---
+
+## [0.9.0] — 2026-06-05
+
+### Changed
+
+- **Dashboard data loading is dramatically faster, and the file watcher no longer destabilizes the
+  Extension Host.** The usage, project-cost, prediction, and heatmap modules previously each scanned
+  and re-parsed the entire `~/.claude/projects/**/*.jsonl` history on every refresh, and the watcher
+  fired an unbounded, non-coalesced refresh per write event — during a Claude Code streaming response
+  that overloaded the shared Extension Host and forced all extensions (including Claude Code) to
+  reload. Now:
+  - A shared parsed-entry cache (`src/data/entryCache.ts`), keyed by file path + `mtime` + size,
+    parses each JSONL file once and serves all four consumers. Append-only files are parsed
+    **incrementally** (only the newly appended bytes), and a cheap directory-mtime pre-check skips the
+    re-walk when nothing changed. Short-window consumers (30-minute prediction, 7-day usage) filter
+    files by mtime instead of reading the whole history.
+  - The file watcher is **debounced** (a write burst collapses into one refresh), and `refresh()` is
+    **serialized/coalesced** so overlapping refreshes can no longer pile up.
+  - Per-model pricing resolution is memoized per aggregation pass.
+
+### Added
+
+- **Instant cold start.** The last computed dashboard aggregates (usage, project costs, heatmap) are
+  persisted to disk (`vscode-claude-status-snapshot.json`) and rendered immediately on the first panel
+  open, then refreshed in the background. The parse cache is persisted too
+  (`vscode-claude-status-parsecache.json`). All cache writes are now atomic (temp → fsync → rename)
+  to avoid corruption.
+
+---
+
+## [0.8.0] — 2026-06-05
+
+### Changed
+
+- **Rate-limit notifications are now driven by actual quota utilization, not a time prediction.**
+  The old trigger extrapolated a burn rate and capped it at the 5h reset, which fired false alerts
+  near every window reset and produced meaningless estimates for z.ai. Notifications now step off the
+  real `utilization5h` / `utilization7d` fraction and behave identically for every provider:
+  - 5h window: silent below 90% used; a warning on each 2% step (90, 92, 94, 96, 98); a distinct
+    **error** ("5h rate limit reached") at 100%.
+  - 7d window: silent below 80% used; a warning on each 5% step at 80, 85, 90 (capped at 90), only
+    for providers that expose a weekly window.
+  - Each notification shows the percent used and the time until that window resets, and re-arms when
+    the window resets.
+
+### Added
+
+- New configurable thresholds: `notifications.rateLimit5hStartPercent` (90),
+  `…rateLimit5hStepPercent` (2), `…rateLimit7dStartPercent` (80), `…rateLimit7dEndPercent` (90),
+  `…rateLimit7dStepPercent` (5).
+
+### Removed
+
+- `notifications.rateLimitWarningThresholdMinutes` — superseded by the utilization-based thresholds.
+
+---
+
 ## [0.7.3] — 2026-06-04
 
 ### Fixed

@@ -36,6 +36,7 @@ function buildI18n(): Record<string, string> {
     tokenCost:             t('Token Cost'),
     today:                 t('Today'),
     days7:                 t('7 days'),
+    daysUnit:              t('days'),
     days7short:            t('7d'),
     days30:                t('30 days'),
     monthEst:              t('Month (est.)'),
@@ -493,7 +494,7 @@ export function getWebviewContent(
   <!-- Usage History (Feature 05) -->
   <div class="card">
     <div class="card-title">
-      ${i18n.usageHistory} (<span id="heatmap-days">90</span> ${i18n.days7})
+      ${i18n.usageHistory} (<span id="heatmap-days">90</span> ${i18n.daysUnit})
     </div>
     <div id="heatmap-content">
       <div class="placeholder">${i18n.loadingHistory}</div>
@@ -590,7 +591,7 @@ export function getWebviewContent(
       if (row7d) { row7d.style.display = show7d ? '' : 'none'; }
 
       if (useCostMode) {
-        const resetSuffix5h = isClaudeAi && usage.resetIn5h > 0
+        const resetSuffix5h = hasRateData && usage.resetIn5h > 0
           ? ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h) : '';
         document.getElementById('usage-5h-label').textContent =
           '$' + usage.cost5h.toFixed(2) + resetSuffix5h;
@@ -612,7 +613,7 @@ export function getWebviewContent(
       }
 
       const fill5h = document.getElementById('usage-5h-fill');
-      if (isClaudeAi) {
+      if (hasRateData) {
         fill5h.style.width = Math.min(100, usage.utilization5h * 100) + '%';
         fill5h.className = 'progress-fill' +
           (denied ? ' error' : usage.utilization5h >= 0.75 ? ' warning' : '');
@@ -1294,8 +1295,12 @@ export class DashboardPanel {
 
   private handleMessage(msg: { type: string; amount?: number | null }): void {
     switch (msg.type) {
-      case 'ready':
-        // Fast first update (usage + prediction, cached heatmap or null)
+      case 'ready': {
+        // Instant render from the last-known (on-disk snapshot) data if we have it, so the
+        // panel never sits on "Loading…" while the live re-parse runs.
+        const last = this.dataManager.getLastData();
+        if (last) { this.sendUpdate(last).catch(() => {}); }
+        // Fast first live update (usage + prediction, cached heatmap or null)
         this.dataManager.getUsageData().then(data => this.sendUpdate(data)).catch(() => {});
         // Trigger heatmap computation; send a second update when ready
         if (!this.dataManager.getLastHeatmapData()) {
@@ -1305,6 +1310,7 @@ export class DashboardPanel {
           }).catch(() => {});
         }
         break;
+      }
 
       case 'refresh':
         this.dataManager.forceRefresh().catch(() => {});

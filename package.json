@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "l10n": "./l10n",
-  "version": "0.7.3",
+  "version": "0.9.1",
   "publisher": "long-kudo",
   "engines": {
     "vscode": "^1.73.0"
@@ -140,12 +140,40 @@
           "default": true,
           "description": "%config.notifications.rateLimitWarning.desc%"
         },
-        "claudeStatus.notifications.rateLimitWarningThresholdMinutes": {
+        "claudeStatus.notifications.rateLimit5hStartPercent": {
           "type": "number",
-          "default": 30,
-          "minimum": 5,
-          "maximum": 120,
-          "description": "%config.notifications.rateLimitWarningThresholdMinutes.desc%"
+          "default": 90,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "%config.notifications.rateLimit5hStartPercent.desc%"
+        },
+        "claudeStatus.notifications.rateLimit5hStepPercent": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "%config.notifications.rateLimit5hStepPercent.desc%"
+        },
+        "claudeStatus.notifications.rateLimit7dStartPercent": {
+          "type": "number",
+          "default": 80,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "%config.notifications.rateLimit7dStartPercent.desc%"
+        },
+        "claudeStatus.notifications.rateLimit7dEndPercent": {
+          "type": "number",
+          "default": 90,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "%config.notifications.rateLimit7dEndPercent.desc%"
+        },
+        "claudeStatus.notifications.rateLimit7dStepPercent": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "%config.notifications.rateLimit7dStepPercent.desc%"
         },
         "claudeStatus.notifications.budgetWarning": {
           "type": "boolean",

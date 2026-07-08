@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { RateLimitData } from './apiClient';
+import { atomicWriteJson } from './atomicWrite';
 
 interface CacheFile {
   version: 2
@@ -75,10 +76,8 @@ export async function writeCache(data: RateLimitData): Promise<void> {
   try {
     // mode 0600: readable/writable by the owner only — the cache can hold rate-limit
     // state derived from credentials, so other local users must not read it (M-1).
-    await fs.writeFile(getCachePath(), JSON.stringify(cache, null, 2), {
-      encoding: 'utf-8',
-      mode: 0o600,
-    });
+    // Atomic write (temp → fsync → rename) so a crash can't leave a corrupt cache.
+    await atomicWriteJson(getCachePath(), cache, 0o600);
   } catch {
     // ignore write failures (e.g. read-only FS)
   }

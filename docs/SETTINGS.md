@@ -127,12 +127,44 @@ What the status bar and dashboard show, depending on your Claude plan and key se
     "description": "Show notification when rate limit is approaching."
   },
 
-  "claudeStatus.notifications.rateLimitWarningThresholdMinutes": {
+  "claudeStatus.notifications.rateLimit5hStartPercent": {
     "type": "number",
-    "default": 30,
-    "minimum": 5,
-    "maximum": 120,
-    "description": "Show rate limit warning this many minutes before exhaustion."
+    "default": 90,
+    "minimum": 0,
+    "maximum": 100,
+    "description": "Start notifying once the 5h rate limit is at least this percent used."
+  },
+
+  "claudeStatus.notifications.rateLimit5hStepPercent": {
+    "type": "number",
+    "default": 2,
+    "minimum": 1,
+    "maximum": 50,
+    "description": "After the 5h start threshold, notify on each step of this many percent (e.g. 90, 92, 94…)."
+  },
+
+  "claudeStatus.notifications.rateLimit7dStartPercent": {
+    "type": "number",
+    "default": 80,
+    "minimum": 0,
+    "maximum": 100,
+    "description": "Start notifying once the 7d (weekly) rate limit is at least this percent used."
+  },
+
+  "claudeStatus.notifications.rateLimit7dEndPercent": {
+    "type": "number",
+    "default": 90,
+    "minimum": 0,
+    "maximum": 100,
+    "description": "Stop adding new 7d notifications above this percent (the cap)."
+  },
+
+  "claudeStatus.notifications.rateLimit7dStepPercent": {
+    "type": "number",
+    "default": 5,
+    "minimum": 1,
+    "maximum": 50,
+    "description": "Between the 7d start and end thresholds, notify on each step of this many percent (e.g. 80, 85, 90)."
   },
 
   "claudeStatus.notifications.budgetWarning": {

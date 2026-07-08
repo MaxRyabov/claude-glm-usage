@@ -1,51 +1,68 @@
 import * as vscode from 'vscode';
 import { DataManager, ClaudeUsageData, PredictionData } from './data/dataManager';
-import { StatusBarManager } from './statusBar';
+import { StatusBarManager, formatDuration } from './statusBar';
 import { config } from './config';
+import { decideRateLimitNotifications, RateLimitNotification } from './data/notificationDecision';
 
 // --- Notification system ---
-// Deduplication: keys are cleared when the 5h rate-limit window resets
+// Deduplication: bucket keys (e.g. '5h-92', '7d-85') are cleared per window when that
+// window resets, so each step re-arms exactly once per fresh window.
 const notifiedKeys = new Set<string>();
 let prevResetIn5h = 0;
+let prevResetIn7d = 0;
 
-function checkWindowReset(resetIn5h: number): void {
-  // If resetIn5h increased by more than 1 hour, the window has reset
+/** Drop all dedup keys for a window (prefix '5h-' / '7d-'). */
+function clearWindowKeys(prefix: string): void {
+  for (const key of notifiedKeys) {
+    if (key.startsWith(prefix)) { notifiedKeys.delete(key); }
+  }
+}
+
+function checkWindowResets(resetIn5h: number, resetIn7d: number): void {
+  // If resetIn increased by more than 1 hour, that window has rolled over.
   if (resetIn5h > prevResetIn5h + 3600) {
-    notifiedKeys.clear();
+    clearWindowKeys('5h-');
+    notifiedKeys.delete('budget'); // re-arm the daily budget alert on each 5h rollover (prior behavior)
+  }
+  if (resetIn7d > prevResetIn7d + 3600) {
+    clearWindowKeys('7d-');
   }
   prevResetIn5h = resetIn5h;
+  prevResetIn7d = resetIn7d;
+}
+
+async function showRateLimitNotification(n: RateLimitNotification): Promise<void> {
+  const reset = formatDuration(n.resetIn);
+  if (n.reached) {
+    const action = await vscode.window.showErrorMessage(
+      vscode.l10n.t('Claude Code: 5h rate limit reached — resets in {0}', reset),
+      vscode.l10n.t('Open Dashboard'), vscode.l10n.t('Dismiss')
+    );
+    if (action === vscode.l10n.t('Open Dashboard')) {
+      vscode.commands.executeCommand('vscode-claude-status.openDashboard');
+    }
+    return;
+  }
+  const message = n.window === '5h'
+    ? vscode.l10n.t('Claude Code: 5h limit {0}% used — resets in {1}', n.percentUsed, reset)
+    : vscode.l10n.t('Claude Code: 7d limit {0}% used — resets in {1}', n.percentUsed, reset);
+  vscode.window.showWarningMessage(message);
 }
 
 async function checkAndNotify(data: ClaudeUsageData, prediction: PredictionData | null): Promise<void> {
-  checkWindowReset(data.resetIn5h);
-  if (!prediction) { return; }
+  checkWindowResets(data.resetIn5h, data.resetIn7d);
 
-  const { estimatedExhaustionIn } = prediction;
-
-  // Rate limit warnings
-  if (config.rateLimitWarning && estimatedExhaustionIn !== null) {
-    const minRemaining = Math.round(estimatedExhaustionIn / 60);
-    if (estimatedExhaustionIn < 600 && !notifiedKeys.has('ratelimit-critical')) {
-      notifiedKeys.add('ratelimit-critical'); // mark before await to prevent duplicates
-      const action = await vscode.window.showErrorMessage(
-        vscode.l10n.t('Claude Code: Rate limit in ~{0} min', minRemaining),
-        vscode.l10n.t('Open Dashboard'), vscode.l10n.t('Dismiss')
-      );
-      if (action === vscode.l10n.t('Open Dashboard')) {
-        vscode.commands.executeCommand('vscode-claude-status.openDashboard');
-      }
-    } else if (
-      estimatedExhaustionIn < config.rateLimitWarningThresholdMinutes * 60 &&
-      !notifiedKeys.has('ratelimit-warning')
-    ) {
-      notifiedKeys.add('ratelimit-warning');
-      vscode.window.showWarningMessage(
-        vscode.l10n.t('Claude Code: Rate limit in ~{0} min', minRemaining)
-      );
+  // Rate limit warnings — driven by actual quota utilization, not a time prediction.
+  if (config.rateLimitWarning) {
+    const notifications = decideRateLimitNotifications(data, config.rateLimitThresholds, notifiedKeys);
+    for (const n of notifications) {
+      notifiedKeys.add(n.key); // mark before await to prevent duplicates
+      await showRateLimitNotification(n);
     }
   }
 
   // Budget warning
+  if (!prediction) { return; }
   if (config.budgetWarning && prediction.budgetRemaining !== null && config.dailyBudget !== null) {
     const remainingPct = (prediction.budgetRemaining / config.dailyBudget) * 100;
     if (remainingPct <= (100 - config.budgetAlertThreshold) && !notifiedKeys.has('budget')) {
@@ -138,15 +155,20 @@ export function activate(context: vscode.ExtensionContext) {
   // Start JSONL file watcher
   dataManager.startWatching();
 
-  // Initial load: usage data + project costs (no API call — cache first)
-  Promise.all([
-    dataManager.getUsageData(),
-    dataManager.refreshProjectCosts(),
-  ]).then(([data]) => {
-    statusBar.update(data, dataManager.getLastProjectCosts());
-  }).catch(() => {
-    // graceful degradation: status bar stays in "loading..." state
-  });
+  // Cold start: render the last on-disk snapshot immediately (marked stale), then do a
+  // live load in the background. loadFromDisk() fires onDidUpdate, so the status bar and any
+  // open dashboard render at once without waiting for a full JSONL re-parse.
+  dataManager.loadFromDisk()
+    .then(() => Promise.all([
+      dataManager.getUsageData(),
+      dataManager.refreshProjectCosts(),
+    ]))
+    .then(([data]) => {
+      statusBar.update(data, dataManager.getLastProjectCosts());
+    })
+    .catch(() => {
+      // graceful degradation: status bar stays in "loading..." state
+    });
 
   // Timer: full periodic refresh every 60 seconds. Uses refresh() (not a bare
   // getUsageData) so it fires onDidUpdate — updating BOTH the status bar and an open

@@ -123,6 +123,27 @@ export function resolvePricing(model: string | undefined, ctx: PricingContext = 
   return fallback;
 }
 
+/**
+ * Build a memoized pricing resolver for one aggregation pass. Resolving a model's
+ * pricing walks the prefix table; in a pass that touches thousands of entries the same
+ * handful of model names repeat constantly, so caching by model name avoids redundant
+ * lookups. (Technique borrowed from the CodeDash project's `findModelPricing`.)
+ */
+export function createPricingResolver(
+  ctx: PricingContext = {},
+): (model: string | undefined) => TokenPricing {
+  const memo = new Map<string, TokenPricing>();
+  return (model: string | undefined): TokenPricing => {
+    const key = model ?? '';
+    let pricing = memo.get(key);
+    if (pricing === undefined) {
+      pricing = resolvePricing(model, ctx);
+      memo.set(key, pricing);
+    }
+    return pricing;
+  };
+}
+
 export function calculateCost(usage: TokenUsage, pricing: TokenPricing = DEFAULT_PRICING): number {
   return (
     ((usage.input_tokens || 0) / 1_000_000) * pricing.inputPerMillion +
