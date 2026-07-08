@@ -1,23 +1,28 @@
 {
-  "name": "vscode-claude-status",
+  "name": "claude-glm-usage",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "l10n": "./l10n",
-  "version": "0.9.1",
-  "publisher": "long-kudo",
+  "version": "1.0.1",
+  "publisher": "max-riabov",
   "engines": {
     "vscode": "^1.73.0"
   },
   "categories": [
-    "Visualization"
+    "Visualization",
+    "Other"
   ],
   "keywords": [
     "claude",
     "claude-code",
-    "real-time",
+    "glm",
+    "z.ai",
+    "zhipu",
+    "quota",
+    "budget",
+    "rate-limit",
     "usage",
     "cost",
-    "customization",
     "monitoring",
     "visualization",
     "anthropic",
@@ -26,15 +31,16 @@
     "status-bar"
   ],
   "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/long-910/vscode-claude-status"
-  },
-  "sponsor": {
-    "url": "https://github.com/sponsors/long-910"
+    "url": "https://github.com/MaxRyabov/claude-glm-usage"
   },
   "bugs": {
-    "url": "https://github.com/long-910/vscode-claude-status/issues"
+    "url": "https://github.com/MaxRyabov/claude-glm-usage/issues"
   },
   "license": "MIT",
   "activationEvents": [

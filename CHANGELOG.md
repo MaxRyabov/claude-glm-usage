@@ -11,6 +11,48 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.1] — 2026-07-08
+
+### Fixed
+
+- **Marketplace listing images & badges now render.** The VS Code Marketplace does not render SVG
+  images or relative image paths in the README, so the icon and status/badge images were broken on
+  the published page. All README images now use absolute `raw.githubusercontent.com` **PNG** URLs,
+  and the shields.io/Open VSX **SVG** badges were replaced with PNG Marketplace badges
+  (`vsmarketplacebadges.dev`).
+- Added a **status-bar screenshot** alongside the dashboard screenshot.
+- Repository renamed to `MaxRyabov/claude-glm-usage`; all repo/issue/clone URLs and the
+  `code --install-extension` id updated to `max-riabov.claude-glm-usage`. Repository Issues enabled.
+
+---
+
+## [1.0.0] — 2026-07-08
+
+### Changed
+
+- **Rebrand & Marketplace relaunch as “Claude Code + GLM — Usage & Cost”.** The extension is now
+  positioned around its dual-provider strength: it tracks usage, cost, and rate-limit quota for
+  **both Claude Code and GLM (z.ai)** in one meter. No functional change to the data layer — GLM
+  (z.ai) detection, real quota fetching, and per-model GLM pricing were already present and remain
+  intact.
+  - New extension identity: `name` → `claude-glm-usage`, new publisher, new icon (a dual-arc usage
+    gauge blending Claude coral and GLM blue with a `>_` code caret).
+  - README rewritten to lead with Claude Code + GLM; the z.ai/GLM setup is promoted to a top-level
+    “Two providers, one meter” section. Localized display strings (en/ja/zh) updated.
+  - Settings (`claudeStatus.*`) and command IDs (`vscode-claude-status.*`) are unchanged.
+
+### Housekeeping
+
+- Removed the unused legacy JSONL parse path (superseded by the incremental `entryCache`), the
+  Yeoman scaffold test, and corrected the stale “Chart.js via CDN” note in the docs (Chart.js is
+  bundled locally to `dist/chart-bundle.js`).
+
+### Credits
+
+- Based on [long-910/vscode-claude-status](https://github.com/long-910/vscode-claude-status) (MIT).
+
+---
+
 ## [0.9.1] — 2026-07-08
 
 ### Fixed

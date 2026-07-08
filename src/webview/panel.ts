@@ -554,7 +554,10 @@ export function getWebviewContent(
       }
     }
 
-    // sync: formatDuration.ts — keep this inline JS in sync with src/webview/formatDuration.ts
+    // sync: formatDuration.ts — this inline JS is an intentional plain-JS copy of the typed
+    // formatDuration() in src/webview/formatDuration.ts (which cannot be imported into this
+    // HTML string). Keep the rollover logic identical; behaviour is covered by
+    // src/test/suite/formatDuration.test.ts. Change both together.
     function fmt(seconds) {
       function r2(tmpl, a, b) { return tmpl.replace('__N__', String(a)).replace('__N2__', String(b)); }
       if (seconds < 3600) {

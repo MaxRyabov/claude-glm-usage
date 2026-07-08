@@ -1,30 +1,26 @@
-# vscode-claude-status
+# Claude Code + GLM — 用量与费用
 
-> Claude Code 的令牌用量与费用 — 始终显示在 VS Code 状态栏中。
-
-![vscode-claude-status social preview](https://repository-images.githubusercontent.com/1165729413/1dc1fbe5-b0d9-45f9-9b5b-c5ad06e36d10)
+> 在 VS Code 状态栏中实时显示 **Claude Code** 和 **GLM (z.ai)** 的令牌用量、费用与速率限制配额。
 
 <div align="center">
 
-[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/long-kudo.vscode-claude-status?style=flat-square&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=long-kudo.vscode-claude-status)
-[![Open VSX](https://img.shields.io/open-vsx/v/long-kudo/vscode-claude-status?style=flat-square&label=Open%20VSX)](https://open-vsx.org/extension/long-kudo/vscode-claude-status)
-[![Downloads](https://img.shields.io/visual-studio-marketplace/d/long-kudo.vscode-claude-status?style=flat-square&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=long-kudo.vscode-claude-status)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/long-kudo.vscode-claude-status?style=flat-square&logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=long-kudo.vscode-claude-status)
-[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.73.0-007ACC?style=flat-square)](https://code.visualstudio.com/)
+<img src="https://raw.githubusercontent.com/MaxRyabov/claude-glm-usage/main/images/icon.png" width="120" alt="Claude Code + GLM Usage icon" />
 
-[![License: MIT](https://img.shields.io/github/license/long-910/vscode-claude-status?style=flat-square)](LICENSE)
-[![CI](https://github.com/long-910/vscode-claude-status/actions/workflows/ci.yml/badge.svg)](https://github.com/long-910/vscode-claude-status/actions/workflows/ci.yml)
-[![Release](https://github.com/long-910/vscode-claude-status/actions/workflows/release.yml/badge.svg)](https://github.com/long-910/vscode-claude-status/actions/workflows/release.yml)
-[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-pink?logo=github)](https://github.com/sponsors/long-910)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/long910)
+[![VS Marketplace](https://vsmarketplacebadges.dev/version-short/max-riabov.claude-glm-usage.png)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/max-riabov.claude-glm-usage.png)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
+[![Rating](https://vsmarketplacebadges.dev/rating-short/max-riabov.claude-glm-usage.png)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
 
 🌐 [English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
 </div>
 
+> 本扩展将 **Claude Code** 和 **GLM (z.ai)** 都作为一等提供方支持，并从 `~/.claude/settings.json`
+> 自动检测当前使用哪一个。使用 GLM 时会显示 z.ai 的真实配额，并按 `message.model` 逐条用 GLM
+> 价格准确计费。详情参见 [English README](README.md)。
+
 ## 概述
 
-**vscode-claude-status** 是一款 Visual Studio Code 扩展，让您无需离开编辑器即可实时监控 [Claude Code](https://claude.ai/code) 的使用情况。
+**Claude Code + GLM — Usage & Cost** 是一款 Visual Studio Code 扩展，让您无需离开编辑器即可实时监控 [Claude Code](https://claude.ai/code) 和 GLM (z.ai) 的使用情况。
 
 扩展从 `~/.claude/projects/` 本地读取会话数据，最多每 5 分钟调用一次 Anthropic API 获取速率限制头信息。所有令牌费用均使用可配置的单价在客户端计算（默认：Claude Sonnet 4.x 定价）。
 
@@ -79,7 +75,9 @@
 面板原生支持 VS Code 的浅色、深色和高对比度主题。
 
 <div align="center">
-<img width="574" alt="仪表板截图" src="https://raw.githubusercontent.com/long-910/vscode-claude-status/main/docs/screenshots/dashboard.png" />
+<img width="820" alt="状态栏" src="https://raw.githubusercontent.com/MaxRyabov/claude-glm-usage/main/docs/screenshots/statusbar.png" />
+<br /><br />
+<img width="574" alt="仪表板截图" src="https://raw.githubusercontent.com/MaxRyabov/claude-glm-usage/main/docs/screenshots/dashboard.png" />
 </div>
 
 ### 🗂 项目级费用追踪 *(VS Code 独有)*
@@ -140,7 +138,7 @@ Claude Status: Set Budget...
 
 > **注意：** 本扩展由作者在 **Claude.ai Pro 套餐**（同时提供 5 小时和 7 天速率限制窗口）上开发和测试。
 >
-> AWS Bedrock、直接 API 密钥、Claude.ai Free 及仅有 5 小时窗口的套餐等其他套餐和提供商，通过自动检测以尽力支持的方式提供。如在您的套餐上遇到意外行为，请[提交 Issue](https://github.com/long-910/vscode-claude-status/issues) 并注明套餐类型，我们会及时跟进处理。
+> AWS Bedrock、直接 API 密钥、Claude.ai Free 及仅有 5 小时窗口的套餐等其他套餐和提供商，通过自动检测以尽力支持的方式提供。如在您的套餐上遇到意外行为，请[提交 Issue](https://github.com/MaxRyabov/claude-glm-usage/issues) 并注明套餐类型，我们会及时跟进处理。
 
 **各套餐类型的行为：**
 
@@ -162,21 +160,21 @@ Claude Status: Set Budget...
 在扩展面板中搜索 **"Claude Status"**，或执行：
 
 ```bash
-code --install-extension long-kudo.vscode-claude-status
+code --install-extension max-riabov.claude-glm-usage
 ```
 
 ### 从 VSIX 安装
 
-1. 从 [Releases](https://github.com/long-910/vscode-claude-status/releases) 页面下载 `.vsix` 文件。
+1. 从 [Releases](https://github.com/MaxRyabov/claude-glm-usage/releases) 页面下载 `.vsix` 文件。
 2. 在 VS Code 中：**扩展 (Ctrl+Shift+X)** → **⋯** → **从 VSIX 安装…**
 
 ### 从源码构建
 
 ```bash
-git clone https://github.com/long-910/vscode-claude-status.git
-cd vscode-claude-status
+git clone https://github.com/MaxRyabov/claude-glm-usage.git
+cd claude-glm-usage
 npm install
-npm run package       # → vscode-claude-status-*.vsix
+npm run package       # → claude-glm-usage-*.vsix
 ```
 
 ---
@@ -289,10 +287,14 @@ npm run package       # → vscode-claude-status-*.vsix
 
 感谢所有为本项目做出贡献的人！
 
-[![Contributors](https://contrib.rocks/image?repo=long-910/vscode-claude-status&exclude=dependabot%5Bbot%5D)](https://github.com/long-910/vscode-claude-status/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=MaxRyabov/claude-glm-usage&exclude=dependabot%5Bbot%5D)](https://github.com/MaxRyabov/claude-glm-usage/graphs/contributors)
 
 ---
 
+## 致谢
+
+本项目基于 [long-910/vscode-claude-status](https://github.com/long-910/vscode-claude-status)（MIT），围绕 **Claude Code + GLM (z.ai)** 双提供方支持进行了重塑与重新定位。衷心感谢原作者。
+
 ## 许可证
 
-[MIT](LICENSE) — © 2026 long-910
+[MIT](LICENSE)

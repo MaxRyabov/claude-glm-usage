@@ -1,5 +1,3 @@
-import * as fs from 'fs/promises';
-import * as path from 'path';
 import {
   TokenUsage,
   TokenPricing,
@@ -22,24 +20,6 @@ export { TokenUsage, TokenPricing, DEFAULT_PRICING, PricingContext, calculateCos
 // importers/tests that pull them from this module keep working unchanged.
 export { getClaudeProjectsDir, isSafePath };
 
-// Actual Claude Code JSONL structure (verified against real data):
-// - type: 'assistant' entries contain usage data
-// - usage is at entry.message.usage (NOT entry.usage)
-// - model is at entry.message.model (e.g. "claude-opus-4-7", "glm-4.6")
-// - costUSD field does not exist; always calculate from tokens
-// - cwd is at the top level of every entry
-interface JsonlEntry {
-  type: string
-  timestamp: string
-  cwd?: string
-  requestId?: string
-  message?: {
-    id?: string
-    model?: string
-    usage?: TokenUsage
-  }
-}
-
 export interface AggregatedUsage {
   cost5h: number
   costDay: number
@@ -48,84 +28,6 @@ export interface AggregatedUsage {
   tokensOut5h: number
   tokensCacheRead5h: number
   tokensCacheCreate5h: number
-}
-
-export async function findAllJsonlFiles(): Promise<string[]> {
-  const projectsDir = getClaudeProjectsDir();
-  const files: string[] = [];
-
-  try {
-    const projectDirs = await fs.readdir(projectsDir);
-    for (const dir of projectDirs) {
-      const dirPath = path.join(projectsDir, dir);
-      try {
-        const stat = await fs.stat(dirPath);
-        if (!stat.isDirectory()) { continue; }
-        const entries = await fs.readdir(dirPath);
-        for (const entry of entries) {
-          if (entry.endsWith('.jsonl')) {
-            // Resolve symlinks before the safety check so an entry pointing
-            // outside the projects directory is rejected (M-3).
-            let realPath = path.join(dirPath, entry);
-            try {
-              realPath = await fs.realpath(realPath);
-            } catch {
-              // fall back to the lexical path if realpath fails
-            }
-            if (isSafePath(realPath)) {
-              files.push(realPath);
-            }
-          }
-        }
-      } catch {
-        // skip unreadable dirs
-      }
-    }
-  } catch {
-    // ~/.claude/projects doesn't exist — graceful degradation
-  }
-
-  return files;
-}
-
-export async function readJsonlFile(filePath: string): Promise<JsonlEntry[]> {
-  const entries: JsonlEntry[] = [];
-  // Claude Code writes one JSONL entry per content block in a streaming response,
-  // all sharing the same requestId and usage counts. Deduplicate to count each
-  // API call exactly once.
-  const seenRequestIds = new Set<string>();
-  try {
-    const content = await fs.readFile(filePath, 'utf-8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) { continue; }
-      try {
-        const obj = JSON.parse(trimmed) as Record<string, unknown>;
-        // Only 'assistant' entries have usage data in message.usage
-        if (
-          obj.type === 'assistant' &&
-          typeof obj.timestamp === 'string' &&
-          obj.message !== undefined
-        ) {
-          const dedupeKey =
-            (typeof obj.requestId === 'string' && obj.requestId) ||
-            (typeof (obj.message as Record<string, unknown>)?.id === 'string' &&
-              (obj.message as Record<string, unknown>).id as string) ||
-            null;
-          if (dedupeKey) {
-            if (seenRequestIds.has(dedupeKey)) { continue; }
-            seenRequestIds.add(dedupeKey);
-          }
-          entries.push(obj as unknown as JsonlEntry);
-        }
-      } catch {
-        // skip malformed lines
-      }
-    }
-  } catch {
-    // skip unreadable files
-  }
-  return entries;
 }
 
 export async function readAllUsage(ctx: PricingContext = {}): Promise<AggregatedUsage> {

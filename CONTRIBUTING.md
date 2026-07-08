@@ -1,4 +1,4 @@
-# Contributing to vscode-claude-status
+# Contributing to Claude Code + GLM — Usage & Cost
 
 Thank you for your interest in contributing!
 This document covers everything you need to set up a local development environment,
@@ -30,8 +30,8 @@ For user-facing documentation see [README.md](README.md).
 ### Setup
 
 ```bash
-git clone https://github.com/long-910/vscode-claude-status.git
-cd vscode-claude-status
+git clone https://github.com/MaxRyabov/claude-glm-usage.git
+cd claude-glm-usage
 npm install
 ```
 
@@ -51,7 +51,7 @@ npm run package        # production .vsix
 ### Project Structure
 
 ```
-vscode-claude-status/
+claude-glm-usage/
 ├── src/
 │   ├── extension.ts          # activate / deactivate
 │   ├── config.ts             # typed settings wrapper

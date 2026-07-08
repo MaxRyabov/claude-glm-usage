@@ -42,11 +42,11 @@ jobs:
       - name: Package extension (.vsix)
         run: vsce package
 
-      # CHANGELOG.md から最新バージョンのセクションだけを抽出してリリースノートにする
+      # Extract only the section for the tagged version from CHANGELOG.md as release notes
       - name: Extract release notes from CHANGELOG.md
         id: changelog
         run: |
-          # v0.1.0 のような最新バージョンのセクションを抽出
+          # Extract the section for the tagged version (e.g. v1.0.0 -> "## [1.0.0]")
           VERSION="${GITHUB_REF_NAME#v}"
           NOTES=$(awk "/^## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
           echo "notes<<EOF" >> $GITHUB_OUTPUT
@@ -60,8 +60,8 @@ jobs:
           body: ${{ steps.changelog.outputs.notes }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # v0.1.0-beta.1 のように - を含むタグは prerelease 扱い
-          token: ${{ secrets.GITHUB_TOKEN }} 
+          # Tags containing a hyphen (e.g. v1.0.0-beta.1) are treated as pre-releases
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to VS Marketplace
         uses: HaaLeo/publish-vscode-extension@v2
