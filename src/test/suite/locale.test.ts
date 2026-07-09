@@ -5,8 +5,20 @@ import * as path from 'path';
 // __dirname at runtime: <root>/out/test/suite → repo root is three levels up.
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 
-// Locales shipped alongside the English base. Add new language codes here.
-const LOCALES = ['ja', 'zh-cn', 'ru'];
+// Discover shipped locales from disk instead of a hardcoded list, so a new
+// `package.nls.<lang>.json` / `l10n/bundle.l10n.<lang>.json` is validated
+// automatically and can never silently bypass the parity guard.
+function discover(dir: string, re: RegExp): string[] {
+  return fs
+    .readdirSync(path.join(ROOT, dir))
+    .map((f) => re.exec(f)?.[1])
+    .filter((lang): lang is string => lang !== undefined)
+    .sort();
+}
+
+// package.nls.json is the English base and is excluded from the locale set.
+const NLS_LOCALES = discover('.', /^package\.nls\.([a-z]{2}(?:-[a-z]+)?)\.json$/);
+const BUNDLE_LOCALES = discover('l10n', /^bundle\.l10n\.([a-z]{2}(?:-[a-z]+)?)\.json$/);
 
 function readKeys(file: string): string[] {
   const obj = JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf-8')) as Record<string, string>;
@@ -28,9 +40,20 @@ function assertSameKeySet(base: string[], other: string[], label: string): void 
 }
 
 suite('localization key parity', () => {
+  test('at least one locale is shipped', () => {
+    assert.ok(NLS_LOCALES.length > 0, 'expected package.nls.<lang>.json files');
+    assert.ok(BUNDLE_LOCALES.length > 0, 'expected l10n/bundle.l10n.<lang>.json files');
+  });
+
+  test('manifest and runtime bundles cover the same locale set', () => {
+    // Every manifest locale must have a matching runtime bundle and vice versa,
+    // so a language can never be half-localized.
+    assert.deepStrictEqual(NLS_LOCALES, BUNDLE_LOCALES);
+  });
+
   test('every package.nls.<lang>.json matches the base key set', () => {
     const base = readKeys('package.nls.json');
-    for (const lang of LOCALES) {
+    for (const lang of NLS_LOCALES) {
       assertSameKeySet(base, readKeys(`package.nls.${lang}.json`), `package.nls.${lang}.json`);
     }
   });
@@ -38,7 +61,7 @@ suite('localization key parity', () => {
   test('all l10n bundles share an identical key set', () => {
     // No English base bundle exists (English lives inline in the source), so use the
     // first shipped locale as the reference key set and require every other to match.
-    const [reference, ...rest] = LOCALES;
+    const [reference, ...rest] = BUNDLE_LOCALES;
     const base = readKeys(`l10n/bundle.l10n.${reference}.json`);
     for (const lang of rest) {
       assertSameKeySet(base, readKeys(`l10n/bundle.l10n.${lang}.json`), `bundle.l10n.${lang}.json`);
@@ -47,8 +70,8 @@ suite('localization key parity', () => {
 
   test('no locale has empty translations', () => {
     const files = [
-      ...LOCALES.map((l) => `package.nls.${l}.json`),
-      ...LOCALES.map((l) => `l10n/bundle.l10n.${l}.json`),
+      ...NLS_LOCALES.map((l) => `package.nls.${l}.json`),
+      ...BUNDLE_LOCALES.map((l) => `l10n/bundle.l10n.${l}.json`),
     ];
     for (const file of files) {
       for (const [key, value] of readEntries(file)) {
@@ -63,21 +86,23 @@ suite('localization key parity', () => {
   test('placeholders are preserved in translated runtime strings', () => {
     // {0}/{1} substitution tokens and __N__/__N2__ duration-format tokens must survive
     // translation, or the UI would render literal placeholders / lose values.
-    const reference = readEntries('l10n/bundle.l10n.ja.json');
+    const [reference] = BUNDLE_LOCALES;
+    const refEntries = readEntries(`l10n/bundle.l10n.${reference}.json`);
     const tokenCount = (s: string, re: RegExp): number => (s.match(re) ?? []).length;
-    for (const lang of LOCALES) {
+    for (const lang of BUNDLE_LOCALES) {
       const bundle = new Map(readEntries(`l10n/bundle.l10n.${lang}.json`));
-      for (const [enKey] of reference) {
+      for (const [enKey] of refEntries) {
         const translated = bundle.get(enKey);
         assert.ok(translated !== undefined, `bundle.l10n.${lang}.json missing key ${JSON.stringify(enKey)}`);
         for (const token of ['{0}', '{1}', '{2}', '__N__', '__N2__']) {
           const re = new RegExp(token.replace(/[{}]/g, '\\$&'), 'g');
-          if (enKey.includes(token)) {
-            assert.ok(
-              tokenCount(translated as string, re) >= 1,
-              `bundle.l10n.${lang}.json: key ${JSON.stringify(enKey)} lost placeholder ${token}`,
-            );
-          }
+          // Require the exact same occurrence count as the English source key, so a
+          // repeated placeholder cannot be silently dropped (e.g. two {0} → one {0}).
+          assert.strictEqual(
+            tokenCount(translated as string, re),
+            tokenCount(enKey, re),
+            `bundle.l10n.${lang}.json: key ${JSON.stringify(enKey)} lost placeholder ${token}`,
+          );
         }
       }
     }
