@@ -17,6 +17,11 @@ out/
 # Yeoman generator boilerplate (not useful for contributors)
 vsc-extension-quickstart.md
 
+# Local secrets — z.ai API tokens used for manual quota checks
+.env
+.env.*
+!.env.example
+
 # OS
 .DS_Store
 Thumbs.db
