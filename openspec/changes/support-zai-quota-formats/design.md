@@ -91,9 +91,12 @@ for clock skew, since `nextResetTime` is the server's clock while the horizon is
 *Alternative rejected — "whichever resets soonest is the 5-hour window".* It inverts precisely
 on the observed case above and mislabels every idle account.
 
-The positional map is keyed by index into the **full** `limits` array, not a filtered one. A
-future refactor that filtered before classifying would silently misalign every payload
-containing a `TIME_LIMIT`.
+Only window caps compete for the slots: a `TIME_LIMIT` never occupies a positional slot, so a
+payload that leads with an MCP entry classifies exactly as one that does not. The resulting map
+is keyed by index into the **full** `limits` array so it can be zipped back onto it entry for
+entry, but the candidate ordering is built from window caps alone. Both halves matter: keying by
+a filtered index would misalign the map, and letting `TIME_LIMIT` take a slot would hand the
+5-hour window to the MCP allowance on the live token tariff, whose payload leads with one.
 
 ### D3. Prefer the derived ratio over `percentage`, guarded by agreement
 
@@ -106,6 +109,13 @@ Where `currentValue` and `usage` are both finite and `usage` is positive, utiliz
 `percentage / 100` wins. The guard is cheap insurance against the one scenario that would
 silently invert the ratio: z.ai correcting its inverted `usage`/`currentValue` naming. Verified
 against live data: 16693/28000 = 59.62 % against a reported 59; 47691/140000 = 34.06 % against 34.
+
+When `percentage` is absent altogether the ratio is used unguarded, because there is nothing to
+disagree with. This case must be stated rather than left to fall through: the current code reads
+`percentage ?? 0`, so a credit window reporting perfectly good amounts and no percentage would
+compare against zero, fail the guard and report 0 % — reintroducing QF-1 through the very
+mechanism meant to fix it. `percentage` is redundant on a credit plan, so its disappearance is a
+realistic next move for the upstream API, not a hypothetical.
 
 ### D4. A missing reset time falls back to a full window, never to zero
 
@@ -123,8 +133,11 @@ A constant fallback is additionally stable across polls, so `checkWindowResets` 
 as a spurious window rollover; a genuine rollover still registers, because a window counting
 down through minutes and then going idle jumps by far more than the 3600 s threshold.
 
-The same fallback covers a `nextResetTime` in the past (a stale snapshot) or absurdly far out
-(an upstream unit mix-up).
+The same fallback covers a `nextResetTime` in the past (a stale snapshot) or absurdly far out.
+"Absurd" is pinned at 400 days: comfortably beyond the longest window z.ai bills on (a month),
+and short enough to catch the realistic upstream slip of sending seconds where milliseconds are
+expected, which lands roughly 55 000 years out. The number lives here so the requirement and the
+code do not drift apart with no recorded reason.
 
 ### D5. Envelope failure detection lives in `fetchZaiQuota`, not in the parser
 
@@ -161,6 +174,59 @@ infers `has7dLimit` from `reset7dAt > 0`, while `writeCache` stores `now + reset
 near 1.8e9 regardless of the input. Every cached read therefore claims a weekly window exists,
 for every provider including Anthropic Pro. Schema v4 stores the boolean explicitly.
 
+A v4 reader still **accepts a v3 file** and always writes v4. Rejecting v3 outright would be
+fail-closed in the usual good sense, but during an extension update two windows run different
+versions against one cache file: the new one rejects v3 and rewrites v4, the old one rejects v4
+and rewrites v3, and both then poll the API on every tick until every window restarts. Accepting
+v3 for reading — deriving `has7dLimit` the old way for those records only, since nothing better
+is recoverable from them — breaks the loop from our side at the cost of one stale boolean that
+the next successful poll overwrites.
+
+The **snapshot schema stays at version 1.** The new fields are optional and `readSnapshot`
+validates only the required discriminators, so an old snapshot remains valid and simply lacks
+them. Bumping it would reject every existing snapshot and cost each user the instant cold-start
+render that `optimize-dashboard-loading` was built to provide — a visible regression bought for
+nothing.
+
+`planLevel` is a free-form string from an external API that lands in the on-disk cache and then
+in WebView markup assembled by concatenation. It is therefore constrained on the way in — accepted
+only as a short string, with the whole cache file rejected otherwise, which is exactly what
+`validateCacheFile` already does for every other field — and escaped on the way out through the
+panel's existing `esc()`. The WebView CSP would keep a tampered cache from executing anything, so
+this is markup corruption rather than code execution, but both guards are one line each.
+
+### D8. A rejected key is remembered, and said out loud
+
+Fixing QF-4 has a consequence the fix itself creates. Today a dead token produces a successful
+HTTP 200, which is cached; after the fix it produces a thrown error, and nothing is cached.
+`shouldCallApi` returns true whenever no cache exists, the poll timer fires every 60 seconds, and
+`fetchZaiQuota` tries two authentication variants — so a user with an expired key would generate
+two requests a minute, indefinitely, in every open window. The project's rule is at most one call
+per five minutes when idle. Trading a wrong number for a request storm is not a fix.
+
+So an authentication-class failure is recorded with its timestamp and suppresses further attempts
+until the cache TTL elapses, exactly as a successful response does. Network and upstream failures
+are deliberately **not** suppressed the same way: those are transient and worth retrying, whereas
+a revoked key will still be revoked in five minutes.
+
+The same classification then drives a distinct user-visible state. Without it the two failures
+that matter most look identical: "z.ai is down for five minutes" and "my key has been dead for a
+week" both render as an aging cache badge. The first resolves itself; the second needs the user
+to do something, and nothing in the interface says so. Since D5 already produces the failure
+class, surfacing it costs a state, not an investigation.
+
+### D9. A fully consumed window reports `denied`
+
+z.ai's utilization has never been able to produce `denied` — the mapping stops at
+`allowed_warning` — so the red status-bar state is unreachable for the provider, and a user whose
+weekly window is exhausted sees the same amber as one at 76 %. The live token account is sitting
+at exactly 100 % while this is being written.
+
+Utilization at or above 1 on either window therefore maps to `denied`. This is a visible change
+beyond "parse the payload correctly", and it was weighed as such: it is one line, it uses data the
+change is already fixing, and leaving it out would mean shipping correct quota numbers attached to
+a status colour that contradicts them.
+
 ## Risks / Trade-offs
 
 - **Clock skew defeats the six-hour veto** → A machine more than an hour slow can push a genuine
@@ -182,23 +248,40 @@ for every provider including Anthropic Pro. Schema v4 stores the boolean explici
   reporting a discrepancy. If z.ai's naming ever flips, utilization quietly reverts to
   whole-percent precision instead of inverting. Accepted: correctness over precision.
 - **`TIME_LIMIT` data is parsed and then discarded** → `RateLimitData` has no slot for a third
-  window. Any future MCP display must be optional per plan, because credit tariffs omit the
-  entry entirely rather than reporting it as zero.
+  window. The user consequence is real and accepted: when the MCP allowance runs out, web search
+  and web reader stop working while the extension still shows everything green. Any future MCP
+  display must be optional per plan, because credit tariffs omit the entry entirely rather than
+  reporting it as zero.
+- **A window cap with a month period has nowhere to go** → It is classified as `other`, takes no
+  slot and does not participate in positional assignment, so a hypothetical monthly credit budget
+  is ignored rather than silently occupying the weekly slot. The alternative — treating a month
+  as unresolved — would push it onto the positional path, where it would take a slot and corrupt
+  both readings.
+- **Amounts may arrive partially** → A window reporting `currentValue` and `usage` but no
+  `remaining` is common enough to specify rather than discover: the amounts block renders from
+  used and total alone, and `remaining` is shown only when the API sends it. It is never
+  recomputed, because the API rounds it.
+- **A user switching tariff keeps a cache entry from the previous generation** → The provider is
+  `z-ai` in both cases, so the provider discriminator does not invalidate it, and the dashboard
+  may show token-era data with no amounts for up to one TTL after the switch. Bounded, self-
+  correcting, and cheaper to accept than to detect.
+- **An unbounded `limits` array reaches the cache** → The parser tolerates malformed input but the
+  results are written to disk. A response carrying thousands of entries — a format change, not an
+  attack — would inflate the cache file, so the number of entries considered is capped.
+- **Two extension versions sharing one cache file** → Addressed in D7 by accepting v3 for reading;
+  the residual cost is that the older window still refetches on its own schedule until it is
+  restarted.
 
 ## Migration Plan
 
-1. Cache `version` 3 becomes 4; snapshot `version` 1 becomes 2. Both validators reject unknown
-   versions and the caller refetches. No reader is written for the old shapes.
-2. No settings change and no user action. Rollback is reverting the extension version — the
-   cache file is regenerated on the first poll either way.
+1. Cache `version` 3 becomes 4. A v4 reader accepts both 3 and 4 and always writes 4; for a v3
+   record `has7dLimit` is derived the old way, since nothing better is recoverable from it.
+2. The snapshot schema is unchanged at version 1 — see D7.
+3. No settings change and no user action. Rollback is reverting the extension version: the older
+   reader rejects v4 and rewrites v3 on its next poll, which the newer reader still accepts.
 
 ## Open Questions
 
-- **Should a fully consumed z.ai window report `denied`?** Today `limitStatus` for z.ai tops out
-  at `allowed_warning`, so the red status-bar state is unreachable — even though the live token
-  account is sitting at 100 % on its weekly window right now. It is a one-line change but a
-  visible behaviour shift beyond the stated goal, so it is deliberately excluded pending a
-  decision.
 - Do `lite` and `pro` token tariffs ever carry `currentValue`/`usage` on `TOKENS_LIMIT`? Only
   `max` accounts were available for observation. The D3 guard makes this safe either way.
 - What other `code` values exist beyond 200, 401, 403, 429, 1000 and 1001? Unknown codes map to

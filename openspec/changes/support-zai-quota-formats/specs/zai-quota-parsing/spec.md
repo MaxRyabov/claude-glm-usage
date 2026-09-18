@@ -8,7 +8,11 @@ version.
 
 Window caps are entries whose `type` is `TOKENS_LIMIT` or `CREDIT_LIMIT`. Period unit codes are
 `3` = hours, `5` = months and `6` = weeks; any other code SHALL be treated as unresolved rather
-than guessed.
+than guessed. An hour period SHALL denote the 5-hour window regardless of `number`; where more
+than one hour-period window cap is present, the first SHALL be used.
+
+A window cap whose period is neither hours nor weeks SHALL be classified as other: it SHALL NOT
+occupy the 5-hour or weekly slot and SHALL NOT participate in positional assignment.
 
 #### Scenario: New-tariff token payload classified by unit
 - **WHEN** the payload contains `TOKENS_LIMIT` with `unit: 3, number: 5` and `TOKENS_LIMIT` with
@@ -22,6 +26,11 @@ than guessed.
 #### Scenario: Undocumented unit code is not guessed
 - **WHEN** a window cap carries `unit: 2`
 - **THEN** the entry is treated as unresolved and classified by array position, not as days
+
+#### Scenario: A month-period window cap takes no slot
+- **WHEN** a window cap carries `unit: 5` alongside an hour-period and a week-period window cap
+- **THEN** the reported 5-hour and weekly windows come from the hour- and week-period entries,
+  and the month-period entry is ignored
 
 ### Requirement: Credit-based tariffs are read as quota windows
 The extension SHALL treat `CREDIT_LIMIT` entries as quota windows equivalent to `TOKENS_LIMIT`
@@ -45,13 +54,17 @@ regardless of their position in the array or their reported percentage.
   status is not a warning
 
 ### Requirement: Array position identifies windows when the period is unstated, and reset time only vetoes
-For payloads whose window caps state no resolvable period, the extension SHALL identify the
-5-hour window by array position, treating the first window cap that is not provably too distant
-as the 5-hour window and the remaining window caps as weekly.
+For each window cap whose period is unresolved, the extension SHALL identify the window by array
+position among the window caps, treating the first candidate that is not provably too distant as
+the 5-hour window and the next remaining window cap as the weekly window.
 
 A window cap SHALL be excluded from the 5-hour slot only when its `nextResetTime` is more than
 six hours in the future. A missing `nextResetTime` SHALL NOT exclude it. Reset time SHALL NOT be
-used to positively select a window.
+used to positively select a window. When every candidate is excluded, the extension SHALL fall
+back to array order rather than leaving the 5-hour window unassigned.
+
+Where more than two window caps are present, only the first two SHALL be used; any further window
+cap SHALL be ignored rather than replacing the weekly window.
 
 #### Scenario: Legacy payload classified by order
 - **WHEN** two `TOKENS_LIMIT` entries carry no `unit` and no `number`
@@ -74,11 +87,22 @@ used to positively select a window.
 - **WHEN** the payload contains exactly one window cap
 - **THEN** the weekly window is reported as absent with zero utilization
 
+#### Scenario: Every candidate vetoed falls back to array order
+- **WHEN** both window caps report a `nextResetTime` more than six hours in the future
+- **THEN** the first is the 5-hour window and the second is the weekly window
+
+#### Scenario: A third window cap is ignored
+- **WHEN** three window caps carry no resolvable period
+- **THEN** the first two fill the 5-hour and weekly windows and the third is ignored
+
 ### Requirement: Utilization prefers absolute amounts when they agree with the reported percentage
 Where a window cap reports both `currentValue` and a positive `usage`, the extension SHALL derive
 utilization from `currentValue / usage`, but only when that value agrees with the reported
-`percentage` within 1.5 percentage points. Otherwise it SHALL use `percentage`. Utilization SHALL
-be clamped to the range 0 to 1.
+`percentage` within 1.5 percentage points. Otherwise it SHALL use `percentage`.
+
+Where `percentage` is absent or not a number and the amounts are usable, the extension SHALL use
+the derived ratio without an agreement check. Where neither a usable `percentage` nor usable
+amounts are present, utilization SHALL be zero. Utilization SHALL be clamped to the range 0 to 1.
 
 `usage` is the cap and `currentValue` is the amount consumed; the extension SHALL NOT interpret
 these names the other way round.
@@ -94,6 +118,10 @@ these names the other way round.
 #### Scenario: Percentage above 100 is clamped
 - **WHEN** a window cap reports `percentage: 250`
 - **THEN** the reported utilization is 1
+
+#### Scenario: Amounts without a percentage are used directly
+- **WHEN** a window cap reports `currentValue: 16693` and `usage: 28000` but no `percentage`
+- **THEN** the reported utilization is approximately 0.596, not zero
 
 ### Requirement: A window without a usable reset time reports a full window horizon
 The extension SHALL report the seconds remaining until a window resets from `nextResetTime`,
@@ -125,7 +153,12 @@ report the billing model as credit-based when any `CREDIT_LIMIT` entry is presen
 token-based otherwise. It SHALL NOT recompute `remaining`, which the upstream API rounds.
 
 These fields SHALL be absent for providers other than z.ai and for payloads that do not report
-absolute amounts.
+absolute amounts. Where a window reports the used and total amounts but not `remaining`, the
+extension SHALL still expose the two it has rather than discarding all three.
+
+The plan tier SHALL be accepted only as a short string and SHALL be rejected — invalidating the
+whole cache record — when it is of another type or exceeds that length, because it originates
+from an external API and is persisted to disk before being rendered.
 
 #### Scenario: Credit tariff exposes amounts and tier
 - **WHEN** a `CREDIT_LIMIT` window reports `currentValue: 16693`, `usage: 28000` and
@@ -141,6 +174,14 @@ absolute amounts.
 - **WHEN** quota data carrying credit amounts and a plan tier is written to the cache and read
   back
 - **THEN** the restored data still carries the same amounts and tier
+
+#### Scenario: A window without a remaining amount still exposes the rest
+- **WHEN** a window cap reports `currentValue` and `usage` but no `remaining`
+- **THEN** the used and total amounts are exposed and the remaining amount is absent
+
+#### Scenario: An oversized plan tier invalidates the cache record
+- **WHEN** a cache file carries a plan tier that is not a short string
+- **THEN** the whole record is rejected and the quota is refetched
 
 ### Requirement: Authentication failures returned with HTTP 200 are detected
 The extension SHALL treat an explicit `success: false` in the response envelope as a failed
@@ -175,6 +216,12 @@ status or as a response envelope. It SHALL NOT retry on any other failure.
 - **WHEN** the first attempt returns an upstream error unrelated to authentication
 - **THEN** no second attempt is made and the request fails
 
+#### Scenario: The last failure decides the class
+- **WHEN** the bearer attempt fails authentication and the raw-token attempt fails for an
+  unrelated reason
+- **THEN** the request fails as that unrelated failure, and is not recorded as an authentication
+  failure
+
 ### Requirement: A successful response without usable limits is an error
 The extension SHALL treat a successful envelope that contains no `TOKENS_LIMIT` and no
 `CREDIT_LIMIT` entry as a failed request, so that an unrecognised payload shape surfaces as
@@ -199,9 +246,70 @@ objects. Unparseable input SHALL yield zero utilization and no weekly window.
   containing null and non-object elements
 - **THEN** it returns zero utilization with no weekly window and does not throw
 
+### Requirement: Repeated authentication failures do not poll the API
+The extension SHALL record an authentication-class failure with the time it occurred and SHALL
+NOT issue another quota request before the cache time-to-live has elapsed since that failure.
+Failures of other classes, such as network or upstream errors, SHALL NOT be suppressed this way.
+
+Without this, a rejected key writes no cache entry, the poll scheduler treats the absence of a
+cache as a reason to call, and the extension issues a request on every timer tick for as long as
+the key stays rejected.
+
+#### Scenario: A rejected key is not retried every tick
+- **WHEN** a quota request fails authentication and another refresh is requested before the cache
+  time-to-live has elapsed
+- **THEN** no request is sent to the provider
+
+#### Scenario: The suppression expires
+- **WHEN** the cache time-to-live has elapsed since the recorded authentication failure
+- **THEN** the next refresh issues a request
+
+#### Scenario: A network failure is retried normally
+- **WHEN** a quota request fails for a network reason rather than authentication
+- **THEN** the next refresh issues a request without waiting for the time-to-live
+
+### Requirement: A rejected key is distinguishable from an outage
+The extension SHALL present an authentication-class failure as a distinct state naming the
+credential as the cause, separate from the display used for stale or unavailable data, so that a
+failure requiring user action is not shown identically to one that resolves itself.
+
+#### Scenario: Rejected key is reported as such
+- **WHEN** the provider rejects the configured token
+- **THEN** the extension indicates that the credential was rejected
+
+#### Scenario: A transient outage is not reported as a credential problem
+- **WHEN** a quota request fails for a network reason
+- **THEN** the extension shows its usual stale or cached state without naming the credential
+
+### Requirement: A fully consumed window reports a denied status
+The extension SHALL report the limit status as denied when either the 5-hour or the weekly
+utilization reaches 1, so that an exhausted quota is distinguishable from an approaching one.
+
+#### Scenario: An exhausted weekly window is denied
+- **WHEN** the weekly window reports 100 % consumed
+- **THEN** the limit status is denied rather than a warning
+
+#### Scenario: A high but unexhausted window stays a warning
+- **WHEN** the highest window reports 90 % consumed
+- **THEN** the limit status is a warning
+
+### Requirement: The number of limit entries considered is bounded
+The extension SHALL consider only a bounded number of entries from `data.limits`, so that an
+unexpectedly large response cannot inflate the data written to disk.
+
+#### Scenario: An oversized limits array is truncated
+- **WHEN** the response carries far more limit entries than any known plan reports
+- **THEN** parsing succeeds, the quota windows are still resolved from the leading entries, and
+  the persisted data stays bounded
+
 ### Requirement: The weekly window presence survives a cache round-trip
 The extension SHALL persist whether a weekly window exists as an explicit value, and SHALL
 restore it unchanged when serving quota data from the cache, for every provider.
+
+The extension SHALL also accept a cache record written by the previous schema version, deriving
+the weekly window presence as that version did, and SHALL always write the current version. This
+keeps two extension versions sharing one cache file from invalidating each other's writes and
+polling the API on every tick until every window is restarted.
 
 #### Scenario: A plan without a weekly window stays without one
 - **WHEN** quota data reporting no weekly window is written to the cache and read back
@@ -210,6 +318,32 @@ restore it unchanged when serving quota data from the cache, for every provider.
 #### Scenario: A plan with a weekly window keeps it
 - **WHEN** quota data reporting a weekly window is written to the cache and read back
 - **THEN** the restored data still reports a weekly window
+
+#### Scenario: A previous-version cache record is still readable
+- **WHEN** the cache file holds a record written by the previous schema version
+- **THEN** it is accepted for reading and the next write uses the current version
+
+#### Scenario: A malformed cache record is still rejected
+- **WHEN** a cache record carries an out-of-range utilization or an unknown limit status
+- **THEN** the record is rejected regardless of its schema version
+
+### Requirement: Credit amounts and plan tier are shown only when available
+The extension SHALL display the absolute amounts beside the window they belong to when those
+amounts are present, and SHALL omit that display entirely when they are not — which includes
+every provider other than z.ai and every token-based z.ai tariff. It SHALL display the plan tier
+when present, escaped, and omit it otherwise.
+
+#### Scenario: Credit tariff shows amounts and tier
+- **WHEN** the dashboard renders quota data carrying credit amounts and a plan tier
+- **THEN** the amounts appear beside their window and the tier is shown
+
+#### Scenario: Anthropic shows neither
+- **WHEN** the dashboard renders Anthropic quota data
+- **THEN** no amounts block and no tier badge are shown
+
+#### Scenario: Token tariff shows neither
+- **WHEN** the dashboard renders z.ai quota data reporting percentages only
+- **THEN** no amounts block is shown and the percentage display is unchanged
 
 ### Requirement: The Anthropic rate-limit path is unaffected
 The extension SHALL continue to derive Anthropic rate-limit data from response headers, with
