@@ -2,287 +2,299 @@
 
 ## Context
 
-`GET {origin}/api/monitor/usage/quota/limit` is z.ai's undocumented monitor endpoint. It is the
-only source of the 5-hour and weekly quota the extension shows for the `z-ai` provider. Two
-payload generations are live at once, and the shape a user sees depends on their tariff, not on
-a version parameter we can request.
+`GET {origin}/api/monitor/usage/quota/limit` — недокументированный эндпоинт мониторинга
+z.ai. Это единственный источник пятичасовой и недельной квоты, которую расширение
+показывает для провайдера `z-ai`. Два поколения ответа живут одновременно, и какую форму
+увидит пользователь, определяет его тариф, а не параметр запроса, которым мы могли бы
+управлять.
 
-Captured from two live accounts on 2026-09-18:
+Снято с двух живых учётных записей 18.09.2026:
 
 ```jsonc
-// New tariff — credit-based
+// Новый тариф — кредитный
 {"code":200,"msg":"Operation successful","success":true,"data":{"level":"max","limits":[
  {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":28000,"currentValue":16693,
   "remaining":11306,"percentage":59,"nextResetTime":1789728421115},
  {"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":140000,"currentValue":47691,
   "remaining":92308,"percentage":34,"nextResetTime":1790062251984}]}}
 
-// Old tariff — token-based
+// Старый тариф — токенный
 {"code":200,"msg":"Operation successful","success":true,"data":{"level":"max","limits":[
- {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":0},          // idle: no nextResetTime
+ {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":0},   // простаивает: nextResetTime нет
  {"type":"TOKENS_LIMIT","unit":6,"number":1,"percentage":100,"nextResetTime":1790075035980},
  {"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":20,"remaining":3980,
   "percentage":1,"nextResetTime":1790593435997,
   "usageDetails":[{"modelCode":"search-prime","usage":13},{"modelCode":"web-reader","usage":7}]}]}}
 ```
 
-Two observations reframe the problem:
+Два наблюдения переставляют задачу:
 
-1. **Both tariffs already send `unit`/`number`/`level`.** The difference that actually breaks us
-   is the entry *type* (`CREDIT_LIMIT` vs `TOKENS_LIMIT`) and the presence of absolute amounts.
-   The `unit`-less shape documented for pre-2026-09 deployments was not observed on either
-   account, so handling it is defensive hardening, not the primary path.
-2. **Authentication failures are indistinguishable from success at the HTTP layer.** Probed
-   directly: `Bearer deadbeef` returns `200 {"code":401,"success":false}`; a well-formed but
-   invalid key returns `200 {"code":1000,"success":false}`.
+1. **Оба тарифа уже присылают `unit`, `number` и `level`.** Ломает нас не это, а тип записи
+   (`CREDIT_LIMIT` против `TOKENS_LIMIT`) и наличие абсолютных величин. Формы без `unit`,
+   описанной для установок до 2026-09, не оказалось ни на одной из учётных записей, поэтому
+   её поддержка — защитный запас, а не основной путь.
+2. **Отказ аутентификации неотличим от успеха на уровне HTTP.** Проверено напрямую:
+   `Bearer deadbeef` возвращает `200 {"code":401,"success":false}`, а правильный по форме,
+   но недействительный ключ — `200 {"code":1000,"success":false}`.
 
-Field semantics worth stating because they are counter-intuitive:
+Семантику полей стоит выписать отдельно, потому что она противоречит интуиции:
 
-| Field | Meaning |
+| Поле | Значение |
 |---|---|
-| `usage` | **The cap.** The naming is inverted relative to every other API we consume. |
-| `currentValue` | The amount **used** (credits, or MCP calls on `TIME_LIMIT`). |
-| `remaining` | Cap minus used, **rounded** — 28000 − 16693 = 11307, reported as 11306, because credits are fractional. |
-| `percentage` | Integer percent consumed. |
-| `nextResetTime` | Epoch **milliseconds**. Omitted entirely for an idle 5-hour window. |
-| `unit` | 3 = hours, 5 = months, 6 = weeks. Codes 1, 2 and 4 were never observed. |
+| `usage` | **Лимит.** Именование перевёрнуто относительно любого другого API, с которым мы работаем. |
+| `currentValue` | **Израсходовано** (кредиты, а на `TIME_LIMIT` — вызовы MCP). |
+| `remaining` | Лимит минус израсходованное, **округлённое**: 28 000 − 16 693 = 11 307, а приходит 11 306, потому что кредиты дробные. |
+| `percentage` | Целое число процентов расхода. |
+| `nextResetTime` | Эпоха в **миллисекундах**. Для простаивающего пятичасового окна отсутствует полностью. |
+| `unit` | 3 — часы, 5 — месяцы, 6 — недели. Коды 1, 2 и 4 не наблюдались. |
 
-Constraints: `parseZaiQuota` must never throw (project rule on graceful degradation); the
-`RateLimitData` contract is consumed by the status bar, webview, prediction and notifications;
-ESLint runs `eqeqeq: "warn"`; tests are Mocha TDD plus `assert`, with no mocking library.
+Ограничения: `parseZaiQuota` не имеет права бросать исключения — это правило проекта
+о мягкой деградации; контракт `RateLimitData` читают статус-бар, вебвью, прогноз
+и уведомления; ESLint включает `eqeqeq: "warn"`; тесты — Mocha в интерфейсе TDD плюс
+`assert`, без библиотек моков.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Correct 5-hour and weekly utilization for both tariff generations and both billing models.
-- Surface absolute credit amounts and the plan tier where the payload provides them.
-- Fail honestly on authentication errors instead of reporting a fabricated 0 %.
-- Keep the Anthropic path equivalent in behaviour, and prove it with tests.
+- Верная пятичасовая и недельная утилизация для обоих поколений тарифов и обеих моделей
+  тарификации.
+- Показ абсолютных величин кредитов и уровня тарифа там, где ответ их содержит.
+- Честный отказ при ошибке аутентификации вместо выдуманных 0 %.
+- Неизменное поведение на пути Anthropic, подтверждённое тестами, а не рассуждением.
 
 **Non-Goals:**
-- Displaying the monthly MCP allowance. It is classified only so it cannot be mistaken for a
-  quota window.
-- Other monitor endpoints (`model-usage`, `tool-usage`, `credit-usage/activity`).
-- Reconciling z.ai's rolling windows against its own dashboard's calendar-day aggregates.
+- Показ месячного лимита MCP. Он классифицируется только затем, чтобы его нельзя было
+  принять за окно квоты.
+- Прочие эндпоинты мониторинга: `model-usage`, `tool-usage`, `credit-usage/activity`.
+- Сведение скользящих окон z.ai с календарными агрегатами её собственного дашборда.
 
 ## Decisions
 
-### D1. Per-entry duck typing, no global format-version switch
+### D1. Поэлементная утиная типизация без глобального переключателя формата
 
-Each entry is classified independently: read the period off the `(type, unit)` pair where it
-resolves, and fall back to array position only for entries where it does not.
+Каждая запись классифицируется самостоятельно: период читается из пары `(type, unit)` там,
+где она разрешается, и только для остальных записей включается откат к позиции в массиве.
 
-*Alternative rejected — sniff the payload once ("does any entry carry `unit`?") and branch to a
-v1 or v2 parser.* Two parsers double the surface that must stay correct, and a half-migrated
-payload — some entries carrying `unit`, some not — would be routed wholly to the wrong one.
-Per-entry resolution degrades exactly as far as the ambiguity extends and no further.
+*Отвергнутая альтернатива — определить формат один раз («есть ли хоть у одной записи
+`unit`?») и разветвиться на парсер v1 или v2.* Два парсера удваивают площадь, которую надо
+держать верной, а наполовину мигрировавший ответ — часть записей с `unit`, часть без —
+целиком уехал бы не в тот. Поэлементное разрешение деградирует ровно настолько, насколько
+простирается неоднозначность, и ни на шаг дальше.
 
-### D2. Array position identifies windows when `unit` is absent; reset time only vetoes
+### D2. Позиция определяет окна там, где нет `unit`, а время сброса только накладывает вето
 
-For `unit`-less payloads the period is named nowhere and both caps share one `type`. The array
-arrives in the order z.ai's own dashboard renders it: 5-hour, then weekly, then MCP.
+В ответах без `unit` период не назван нигде, а оба лимита делят один `type`. Массив
+приходит в том порядке, в каком его рисует собственный дашборд z.ai: пятичасовое окно,
+затем недельное, затем MCP.
 
-Reset time cannot carry this signal positively. An exhausted weekly cap was observed resetting
-**40 minutes before** the 5-hour window, while an idle 5-hour window carries no reset time at
-all. So position decides, and the reset time is used only to *rule a candidate out*: anything
-more than six hours away is provably not a 5-hour window — five hours, plus one hour of slack
-for clock skew, since `nextResetTime` is the server's clock while the horizon is the user's.
+Время сброса не может нести этот признак положительно. Исчерпанное недельное окно
+наблюдалось сбрасывающимся **на сорок минут раньше** пятичасового, а простаивающее
+пятичасовое не несёт времени сброса вовсе. Поэтому решает порядок, а время сброса лишь
+*исключает* кандидата: всё, что дальше шести часов, заведомо не пятичасовое окно — пять
+часов плюс час запаса на расхождение часов, ведь `nextResetTime` идёт по часам сервера,
+а горизонт считается по часам пользователя.
 
-*Alternative rejected — "whichever resets soonest is the 5-hour window".* It inverts precisely
-on the observed case above and mislabels every idle account.
+*Отвергнутая альтернатива — «пятичасовое то, что сбрасывается раньше».* Она переворачивается
+ровно на наблюдённом случае выше и путает ярлыки у каждой простаивающей учётной записи.
 
-Only window caps compete for the slots: a `TIME_LIMIT` never occupies a positional slot, so a
-payload that leads with an MCP entry classifies exactly as one that does not. The resulting map
-is keyed by index into the **full** `limits` array so it can be zipped back onto it entry for
-entry, but the candidate ordering is built from window caps alone. Both halves matter: keying by
-a filtered index would misalign the map, and letting `TIME_LIMIT` take a slot would hand the
-5-hour window to the MCP allowance on the live token tariff, whose payload leads with one.
+За слоты соревнуются только окна квоты: `TIME_LIMIT` не занимает позиционного слота,
+поэтому ответ, начинающийся с записи MCP, классифицируется так же, как ответ без неё.
+Итоговая карта ключуется индексом в **полном** массиве `limits`, чтобы её можно было
+наложить обратно запись к записи, но порядок кандидатов строится только по окнам квоты.
+Важны обе половины: ключ по отфильтрованному индексу сместил бы карту, а разрешение
+`TIME_LIMIT` занимать слот отдало бы пятичасовое окно лимиту MCP на живом токенном тарифе,
+чей ответ как раз с него и начинается.
 
-### D3. Prefer the derived ratio over `percentage`, guarded by agreement
+### D3. Отношение величин точнее `percentage`, но со сверкой
 
-`percentage` is an integer: the live credit account reports 59 for an actual 59.62 %. The
-notification ladder steps at 90/92/94/96/98, so a whole-percent input quantises the very
-thresholds it drives.
+`percentage` целочисленный: живая кредитная учётная запись сообщает 59 при фактических
+59,62 %. Уведомления шагают по 90, 92, 94, 96 и 98 %, то есть целочисленный вход огрубляет
+ровно те пороги, которые от него зависят.
 
-Where `currentValue` and `usage` are both finite and `usage` is positive, utilization is
-`currentValue / usage` — **but only when it agrees with `percentage` within 1.5 pp**, otherwise
-`percentage / 100` wins. The guard is cheap insurance against the one scenario that would
-silently invert the ratio: z.ai correcting its inverted `usage`/`currentValue` naming. Verified
-against live data: 16693/28000 = 59.62 % against a reported 59; 47691/140000 = 34.06 % against 34.
+Там, где `currentValue` и `usage` конечны, а `usage` положителен, утилизация считается как
+`currentValue / usage` — **но только если сходится с `percentage` в пределах 1,5 п. п.**,
+иначе побеждает `percentage / 100`. Сверка — дешёвая страховка от единственного сценария,
+который тихо перевернул бы отношение: z.ai однажды исправит своё перевёрнутое именование
+`usage` и `currentValue`. Сверено с живыми данными: 16 693 / 28 000 = 59,62 % против
+сообщённых 59; 47 691 / 140 000 = 34,06 % против 34.
 
-When `percentage` is absent altogether the ratio is used unguarded, because there is nothing to
-disagree with. This case must be stated rather than left to fall through: the current code reads
-`percentage ?? 0`, so a credit window reporting perfectly good amounts and no percentage would
-compare against zero, fail the guard and report 0 % — reintroducing QF-1 through the very
-mechanism meant to fix it. `percentage` is redundant on a credit plan, so its disappearance is a
-realistic next move for the upstream API, not a hypothetical.
+Когда `percentage` отсутствует совсем, отношение берётся без сверки — сверять не с чем.
+Этот случай надо назвать прямо, а не оставить на самотёк: нынешний код читает
+`percentage ?? 0`, поэтому кредитное окно с безупречными величинами и без процента
+сравнилось бы с нулём, сверку бы не прошло и сообщило 0 % — то есть QF-1 вернулся бы через
+тот самый механизм, который его чинит. На кредитном тарифе `percentage` избыточен, так что
+его исчезновение — реалистичный следующий шаг вышестоящего API, а не выдумка.
 
-### D4. A missing reset time falls back to a full window, never to zero
+### D4. Отсутствующее время сброса откатывается к полному окну, но не к нулю
 
-Zero is not a neutral "unknown" here. `panel.ts` hides the prediction chart when `resetIn5h` is
-zero, and `prediction.ts` computes `Math.min(secondsUntilExhaustion, resetIn5h)`, so a zero
-yields `estimatedExhaustionIn = 0` and a `critical` recommendation — "under 10 minutes left" —
-shown to a user sitting at 3 % utilization.
+Ноль здесь не нейтральное «неизвестно». `panel.ts` прячет график прогноза при нулевом
+`resetIn5h`, а `prediction.ts` считает `Math.min(secondsUntilExhaustion, resetIn5h)`,
+поэтому ноль даёт `estimatedExhaustionIn = 0` и рекомендацию `critical` — «осталось меньше
+десяти минут» — пользователю с утилизацией 3 %.
 
-For the 5-hour window the fallback is also simply correct: the window is anchored to the first
-request inside it, so an entry with no `nextResetTime` is an idle window with no anchor yet, and
-the true horizon is a full five hours. The length comes from `unit` times `number` when
-resolvable, otherwise from the window kind (5 h or 7 d).
+Для пятичасового окна откат к тому же и просто верен: окно привязано к первому запросу
+внутри него, значит запись без `nextResetTime` — это простаивающее окно, у которого
+привязки ещё нет, и настоящий горизонт равен полным пяти часам. Длина берётся из
+произведения `unit` на `number`, где оно разрешается, иначе — из вида окна: пять часов
+или семь суток.
 
-A constant fallback is additionally stable across polls, so `checkWindowResets` cannot read it
-as a spurious window rollover; a genuine rollover still registers, because a window counting
-down through minutes and then going idle jumps by far more than the 3600 s threshold.
+Постоянная величина вдобавок стабильна между опросами, поэтому `checkWindowResets`
+не примет её за ложный сброс окна; настоящий сброс по-прежнему виден, потому что окно,
+досчитавшее до минут и ушедшее в простой, подскакивает куда сильнее порога в 3600 секунд.
 
-The same fallback covers a `nextResetTime` in the past (a stale snapshot) or absurdly far out.
-"Absurd" is pinned at 400 days: comfortably beyond the longest window z.ai bills on (a month),
-and short enough to catch the realistic upstream slip of sending seconds where milliseconds are
-expected, which lands roughly 55 000 years out. The number lives here so the requirement and the
-code do not drift apart with no recorded reason.
+Тот же откат покрывает `nextResetTime` в прошлом (протухший снимок) и заведомо далёкий.
+«Заведомо далёкий» закреплён на 400 сутках: с запасом дальше самого длинного окна, по
+которому z.ai выставляет счёт (месяц), и достаточно близко, чтобы поймать реалистичную
+промашку вышестоящего API — секунды вместо миллисекунд, что уносит примерно
+на 55 000 лет вперёд. Число живёт здесь, чтобы требование и код не разъехались без
+записанной причины.
 
-### D5. Envelope failure detection lives in `fetchZaiQuota`, not in the parser
+### D5. Обнаружение отказа живёт в `fetchZaiQuota`, а не в парсере
 
-`parseZaiQuota` stays a total function — that is the project's graceful-degradation rule, and
-the parser is the piece under test with hostile input. `fetchZaiQuota` already has a `throws`
-contract that `DataManager` catches and converts into cache, then stale, then local-only, which
-is exactly the desired user experience for a dead token.
+`parseZaiQuota` остаётся тотальной функцией — таково правило проекта о мягкой деградации,
+и именно парсер проверяется враждебным входом. У `fetchZaiQuota` уже есть контракт
+с исключением, который `DataManager` ловит и превращает в показ кэша, затем протухших
+данных, затем режима только затрат, — а это ровно то, что нужно пользователю
+с мёртвым токеном.
 
-Only an explicit `success: false` counts as a failure; a valid payload omitting the field must
-keep flowing. `code` maps to a status — 401, 403 and 429 pass through, 1000 and 1001 are auth
-failures, anything else is 502 — and the auth-variant retry is driven by that class rather than
-the HTTP status, which is what makes the Bearer-to-raw-token fallback reachable in production
-for the first time.
+Отказом считается только явный `success: false`; корректный ответ, где поле опущено, обязан
+проходить дальше. `code` сопоставляется со статусом — 401, 403 и 429 проходят как есть,
+1000 и 1001 означают отказ аутентификации, всё прочее даёт 502, — и перебор способов
+авторизации управляется этим классом, а не HTTP-статусом. Именно это впервые делает
+запасной вариант «Bearer → сырой токен» достижимым в реальной работе.
 
-`msg` is never surfaced: z.ai returned English on one endpoint and Chinese on another within a
-single request batch, ignoring `Accept-Language`.
+`msg` пользователю не показывается никогда: в одном пакете запросов z.ai ответила
+по-английски на одном эндпоинте и по-китайски на другом, не считаясь с `Accept-Language`.
 
-### D6. A 200 carrying no usable window cap is an error, not 0 %
+### D6. Ответ 200 без пригодных окон — это ошибка, а не 0 %
 
-If the envelope claims success but contains no `TOKENS_LIMIT` and no `CREDIT_LIMIT`, throw. This
-is precisely the class of event that created this work — a payload shape moving underneath us —
-and the difference between "stale quota with an age badge" and "confidently wrong zero" is the
-whole point of the change.
+Если конверт объявляет успех, но не содержит ни `TOKENS_LIMIT`, ни `CREDIT_LIMIT`, —
+бросаем исключение. Это ровно тот класс событий, который породил всю работу: форма ответа
+уехала у нас под ногами. А разница между «протухшая квота с пометкой о возрасте»
+и «уверенно неверный ноль» и есть весь смысл изменения.
 
-### D7. Optional fields on `RateLimitData`, persisted in cache v4
+### D7. Необязательные поля в `RateLimitData`, сохраняемые в кэше v4
 
-`billing`, `planLevel`, `credits5h` and `credits7d` are optional and populated only by the z.ai
-parser, so the Anthropic path is unchanged by construction. They must be cached, because the
-dashboard is served from cache for most of a five-minute TTL and the amounts would otherwise
-flicker between polls.
+`billing`, `planLevel`, `credits5h` и `credits7d` необязательны и заполняются только
+парсером z.ai, поэтому путь Anthropic не меняется по построению. Кэшировать их обязательно:
+дашборд бо́льшую часть пятиминутного TTL отдаётся из кэша, иначе величины мигали бы
+от опроса к опросу.
 
-The cache bump is also the moment to fix an unrelated latent defect: `cacheToRateLimitData`
-infers `has7dLimit` from `reset7dAt > 0`, while `writeCache` stores `now + resetIn7d` — a value
-near 1.8e9 regardless of the input. Every cached read therefore claims a weekly window exists,
-for every provider including Anthropic Pro. Schema v4 stores the boolean explicitly.
+Подъём версии кэша — заодно и момент починить несвязанный латентный дефект:
+`cacheToRateLimitData` выводит `has7dLimit` из условия `reset7dAt > 0`, а `writeCache`
+пишет туда `now + resetIn7d` — величину около 1,8 × 10⁹ независимо от входа. Значит любое
+чтение из кэша утверждает, что недельное окно есть, для каждого провайдера, включая
+Anthropic Pro. Схема v4 хранит это булево явно.
 
-A v4 reader still **accepts a v3 file** and always writes v4. Rejecting v3 outright would be
-fail-closed in the usual good sense, but during an extension update two windows run different
-versions against one cache file: the new one rejects v3 and rewrites v4, the old one rejects v4
-and rewrites v3, and both then poll the API on every tick until every window restarts. Accepting
-v3 for reading — deriving `has7dLimit` the old way for those records only, since nothing better
-is recoverable from them — breaks the loop from our side at the cost of one stale boolean that
-the next successful poll overwrites.
+Читатель v4 при этом **принимает и файл v3**, а пишет всегда v4. Жёсткий отказ от v3 был бы
+fail-closed в обычном хорошем смысле, но во время обновления расширения два окна работают
+с одним файлом кэша разными версиями: новое отвергает v3 и переписывает v4, старое
+отвергает v4 и переписывает v3, после чего оба опрашивают API на каждом тике, пока не
+перезапустятся все окна. Приём v3 на чтение — с выводом `has7dLimit` по-старому только для
+таких записей, ведь ничего лучше из них не восстановить, — разрывает петлю с нашей стороны
+ценой одного устаревшего булева, которое перезапишет первый же удачный опрос.
 
-The **snapshot schema stays at version 1.** The new fields are optional and `readSnapshot`
-validates only the required discriminators, so an old snapshot remains valid and simply lacks
-them. Bumping it would reject every existing snapshot and cost each user the instant cold-start
-render that `optimize-dashboard-loading` was built to provide — a visible regression bought for
-nothing.
+**Схема снапшота остаётся на версии 1.** Новые поля необязательны, а `readSnapshot`
+проверяет только обязательные дискриминаторы, поэтому старый снапшот остаётся валидным
+и просто не содержит их. Подъём версии отверг бы все существующие снапшоты и стоил бы
+каждому пользователю мгновенной отрисовки при холодном старте, ради которой сделан
+`optimize-dashboard-loading`, — заметная регрессия, купленная ни за что.
 
-`planLevel` is a free-form string from an external API that lands in the on-disk cache and then
-in WebView markup assembled by concatenation. It is therefore constrained on the way in — accepted
-only as a short string, with the whole cache file rejected otherwise, which is exactly what
-`validateCacheFile` already does for every other field — and escaped on the way out through the
-panel's existing `esc()`. The WebView CSP would keep a tampered cache from executing anything, so
-this is markup corruption rather than code execution, but both guards are one line each.
+`planLevel` — свободная строка из внешнего API, которая попадает в дисковый кэш, а затем
+в разметку вебвью, собираемую конкатенацией. Поэтому она ограничивается на входе:
+принимается только как короткая строка, иначе файл кэша отвергается целиком — ровно так,
+как `validateCacheFile` уже поступает с каждым другим полем, — и экранируется на выходе
+через имеющийся в панели `esc()`. CSP вебвью не дал бы подделанному кэшу ничего выполнить,
+так что речь о порче вёрстки, а не о выполнении кода, но обе защиты стоят по строке.
 
-### D8. A rejected key is remembered, and said out loud
+### D8. Отвергнутый ключ запоминается — и называется вслух
 
-Fixing QF-4 has a consequence the fix itself creates. Today a dead token produces a successful
-HTTP 200, which is cached; after the fix it produces a thrown error, and nothing is cached.
-`shouldCallApi` returns true whenever no cache exists, the poll timer fires every 60 seconds, and
-`fetchZaiQuota` tries two authentication variants — so a user with an expired key would generate
-two requests a minute, indefinitely, in every open window. The project's rule is at most one call
-per five minutes when idle. Trading a wrong number for a request storm is not a fix.
+У исправления QF-4 есть следствие, которое оно само и создаёт. Сегодня мёртвый токен даёт
+успешный HTTP 200, и тот кэшируется; после исправления он даёт исключение, и в кэш
+не попадает ничего. `shouldCallApi` возвращает истину всякий раз, когда кэша нет, таймер
+опроса срабатывает каждые 60 секунд, а `fetchZaiQuota` пробует два способа авторизации —
+то есть пользователь с просроченным ключом порождал бы два запроса в минуту, бессрочно,
+в каждом открытом окне. Правило проекта — не чаще одного обращения в пять минут в простое.
+Менять неверное число на шквал запросов — не исправление.
 
-So an authentication-class failure is recorded with its timestamp and suppresses further attempts
-until the cache TTL elapses, exactly as a successful response does. Network and upstream failures
-are deliberately **not** suppressed the same way: those are transient and worth retrying, whereas
-a revoked key will still be revoked in five minutes.
+Поэтому отказ класса «аутентификация» запоминается вместе со временем и подавляет
+дальнейшие попытки, пока не истечёт TTL кэша, — ровно как это делает успешный ответ.
+Сетевые и вышестоящие отказы намеренно **не** подавляются так же: они преходящи и повтора
+стоят, тогда как отозванный ключ через пять минут останется отозванным.
 
-The same classification then drives a distinct user-visible state. Without it the two failures
-that matter most look identical: "z.ai is down for five minutes" and "my key has been dead for a
-week" both render as an aging cache badge. The first resolves itself; the second needs the user
-to do something, and nothing in the interface says so. Since D5 already produces the failure
-class, surfacing it costs a state, not an investigation.
+Та же классификация питает и отдельное видимое состояние. Без него два самых важных отказа
+выглядят одинаково: «z.ai лежит пять минут» и «мой ключ мёртв неделю» рисуются стареющей
+пометкой о возрасте кэша. Первое пройдёт само, второе требует действий пользователя,
+и ничто в интерфейсе об этом не говорит. Класс отказа D5 уже вычисляет, так что показ
+стоит состояния, а не расследования.
 
-### D9. A fully consumed window reports `denied`
+### D9. Полностью исчерпанное окно сообщает `denied`
 
-z.ai's utilization has never been able to produce `denied` — the mapping stops at
-`allowed_warning` — so the red status-bar state is unreachable for the provider, and a user whose
-weekly window is exhausted sees the same amber as one at 76 %. The live token account is sitting
-at exactly 100 % while this is being written.
+Утилизация z.ai никогда не могла дать `denied` — сопоставление останавливается на
+`allowed_warning`, — поэтому красное состояние статус-бара для провайдера недостижимо,
+и пользователь с исчерпанным недельным окном видит тот же жёлтый, что и пользователь
+на 76 %. Живая токенная учётная запись стоит ровно на 100 %, пока пишутся эти строки.
 
-Utilization at or above 1 on either window therefore maps to `denied`. This is a visible change
-beyond "parse the payload correctly", and it was weighed as such: it is one line, it uses data the
-change is already fixing, and leaving it out would mean shipping correct quota numbers attached to
-a status colour that contradicts them.
+Поэтому утилизация от 1 на любом из окон даёт `denied`. Это видимое изменение сверх
+«разобрать ответ верно», и оно взвешено как таковое: одна строка, на данных, которые
+изменение и так чинит, а без него мы выпустили бы верные числа квоты рядом с цветом
+статуса, который им противоречит.
 
 ## Risks / Trade-offs
 
-- **Clock skew defeats the six-hour veto** → A machine more than an hour slow can push a genuine
-  5-hour reset outside the horizon and, on a `unit`-less payload, hand the short slot to the
-  weekly cap. The one-hour slack covers ordinary NTP drift; the horizon must never be tightened
-  below six hours. Unrecoverable from the payload alone, and accepted.
-- **A third window cap, such as a monthly credit budget, would be classified `other`** →
-  Deliberate: `unit: 5` on a window cap resolves to `other` rather than to `null`, so an
-  unexpected cap is ignored instead of collapsing the whole payload onto the positional path.
-- **Older z.ai tariffs start emitting weekly notifications they never sent before** → This is
-  the QF-3 fix working as intended, but from the user's side it is an unannounced change in
-  behaviour. Mitigation: an explicit changelog entry.
-- **Cache and snapshot version bumps invalidate every existing file** → One cold refetch per
-  user. Both validators are already fail-closed, so this path is exercised today, not new.
-- **Test fixtures pinned to a fixed clock** → The existing suite calls `Date.now()` at module
-  scope and again inside the parser; new positional tests sit on the six-hour boundary and would
-  flake on that slack. `now` becomes an injectable parameter and every new test passes it.
-- **A `percentage`/ratio disagreement is silent** → By design the guard falls back rather than
-  reporting a discrepancy. If z.ai's naming ever flips, utilization quietly reverts to
-  whole-percent precision instead of inverting. Accepted: correctness over precision.
-- **`TIME_LIMIT` data is parsed and then discarded** → `RateLimitData` has no slot for a third
-  window. The user consequence is real and accepted: when the MCP allowance runs out, web search
-  and web reader stop working while the extension still shows everything green. Any future MCP
-  display must be optional per plan, because credit tariffs omit the entry entirely rather than
-  reporting it as zero.
-- **A window cap with a month period has nowhere to go** → It is classified as `other`, takes no
-  slot and does not participate in positional assignment, so a hypothetical monthly credit budget
-  is ignored rather than silently occupying the weekly slot. The alternative — treating a month
-  as unresolved — would push it onto the positional path, where it would take a slot and corrupt
-  both readings.
-- **Amounts may arrive partially** → A window reporting `currentValue` and `usage` but no
-  `remaining` is common enough to specify rather than discover: the amounts block renders from
-  used and total alone, and `remaining` is shown only when the API sends it. It is never
-  recomputed, because the API rounds it.
-- **A user switching tariff keeps a cache entry from the previous generation** → The provider is
-  `z-ai` in both cases, so the provider discriminator does not invalidate it, and the dashboard
-  may show token-era data with no amounts for up to one TTL after the switch. Bounded, self-
-  correcting, and cheaper to accept than to detect.
-- **An unbounded `limits` array reaches the cache** → The parser tolerates malformed input but the
-  results are written to disk. A response carrying thousands of entries — a format change, not an
-  attack — would inflate the cache file, so the number of entries considered is capped.
-- **Two extension versions sharing one cache file** → Addressed in D7 by accepting v3 for reading;
-  the residual cost is that the older window still refetches on its own schedule until it is
-  restarted.
+- **Расхождение часов побеждает шестичасовое вето** → Машина, отстающая больше чем на час,
+  способна вытолкнуть настоящий пятичасовой сброс за горизонт и на ответе без `unit` отдать
+  короткий слот недельному окну. Часовой запас покрывает обычный дрейф NTP; опускать
+  горизонт ниже шести часов нельзя. Из самого ответа это неисправимо, и мы это принимаем.
+- **Третье окно квоты, например месячный кредитный бюджет, классифицируется как `other`** →
+  Намеренно: `unit: 5` на окне квоты даёт `other`, а не «неразрешено», поэтому неожиданный
+  лимит игнорируется, вместо того чтобы обрушить весь ответ на позиционный путь.
+- **Прежние тарифы z.ai начнут слать недельные уведомления, которых раньше не было** →
+  Так работает исправление QF-3, но со стороны пользователя это необъявленная смена
+  поведения. Смягчение — явная запись в changelog.
+- **Подъём версии кэша обесценивает существующие файлы** → Один холодный перезапрос на
+  пользователя, причём валидатор и так устроен как fail-closed, так что путь не новый.
+- **Фикстуры тестов привязаны к фиксированным часам** → Действующий набор берёт `Date.now()`
+  на уровне модуля и ещё раз внутри парсера; новые позиционные тесты стоят на шестичасовой
+  границе и на таком люфте были бы нестабильны. `now` становится инъектируемым параметром,
+  и каждый новый тест передаёт его явно.
+- **Расхождение `percentage` и отношения гасится молча** → По замыслу сверка откатывается,
+  а не сообщает о разнице. Если z.ai однажды перевернёт именование, утилизация тихо
+  вернётся к целочисленной точности, а не перевернётся сама. Принимаем: верность важнее
+  точности.
+- **Данные `TIME_LIMIT` разбираются и выбрасываются** → В `RateLimitData` нет слота для
+  третьего окна. Следствие для пользователя реально и принимается: когда лимит MCP
+  исчерпан, веб-поиск и веб-ридер перестают работать, а расширение продолжает показывать
+  всё зелёным. Любой будущий показ MCP обязан быть опциональным по тарифу, потому что
+  кредитные тарифы не присылают эту запись вовсе, а не присылают её с нулём.
+- **Величины могут прийти частично** → Окно с `currentValue` и `usage`, но без `remaining`,
+  встречается достаточно часто, чтобы это описать, а не обнаружить: блок величин рисуется
+  по израсходованному и лимиту, а остаток показывается, только если API его прислал.
+  Пересчитывать его нельзя — API округляет.
+- **Пользователь, сменивший тариф, сохраняет запись кэша прошлого поколения** → Провайдер
+  в обоих случаях `z-ai`, поэтому дискриминатор провайдера её не обесценит, и дашборд может
+  до одного TTL показывать данные токенной эпохи без величин. Ограничено по времени,
+  самоисправляется, и принять это дешевле, чем обнаруживать.
+- **Неограниченный массив `limits` попадает в кэш** → Парсер терпим к мусору, но результат
+  пишется на диск. Ответ с тысячами записей — смена формата, а не атака — раздул бы файл
+  кэша, поэтому число рассматриваемых записей ограничено.
+- **Две версии расширения на одном файле кэша** → Решено в D7 приёмом v3 на чтение;
+  остаточная плата — старое окно всё равно перезапрашивает по своему расписанию, пока
+  его не перезапустят.
 
 ## Migration Plan
 
-1. Cache `version` 3 becomes 4. A v4 reader accepts both 3 and 4 and always writes 4; for a v3
-   record `has7dLimit` is derived the old way, since nothing better is recoverable from it.
-2. The snapshot schema is unchanged at version 1 — see D7.
-3. No settings change and no user action. Rollback is reverting the extension version: the older
-   reader rejects v4 and rewrites v3 on its next poll, which the newer reader still accepts.
+1. Версия кэша 3 становится 4. Читатель v4 принимает и 3, и 4, а пишет всегда 4; для записи
+   v3 `has7dLimit` выводится по-старому, так как ничего лучше из неё не восстановить.
+2. Схема снапшота не меняется и остаётся версии 1 — см. D7.
+3. Настройки не меняются, действий от пользователя не требуется. Откат — возврат прежней
+   версии расширения: старый читатель отвергнет v4 и перепишет v3 на ближайшем опросе,
+   а новый читатель v3 по-прежнему принимает.
 
 ## Open Questions
 
-- Do `lite` and `pro` token tariffs ever carry `currentValue`/`usage` on `TOKENS_LIMIT`? Only
-  `max` accounts were available for observation. The D3 guard makes this safe either way.
-- What other `code` values exist beyond 200, 401, 403, 429, 1000 and 1001? Unknown codes map to
-  502 and do not retry, which is the safe default.
+- Присылают ли токенные тарифы `lite` и `pro` поля `currentValue` и `usage` на
+  `TOKENS_LIMIT`? Для наблюдения были доступны только учётные записи уровня `max`. Сверка
+  из D3 делает оба исхода безопасными.
+- Какие ещё значения `code` существуют помимо 200, 401, 403, 429, 1000 и 1001? Неизвестные
+  коды дают 502 и не повторяются — это безопасное умолчание.

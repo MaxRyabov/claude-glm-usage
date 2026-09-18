@@ -1,170 +1,188 @@
 # Tasks: support-zai-quota-formats
 
-> **Prerequisite**: PR #5 (Russian localization) must be merged into `main` and this branch
-> rebased onto it before task 5.3 — `l10n/bundle.l10n.ru.json` and the locale parity test do not
-> exist on `main` yet.
+## 1. Классификация окон (`src/data/apiClient.ts`)
 
-## 1. Window classification (`src/data/apiClient.ts`)
+- [ ] 1.1 Удалить `zaiUnitToMs`: наружу он не экспортируется, а его карта единиц неверна
+      (5 как минуты, 6 как сутки). Заменить константами: 3 — часы, 5 — месяцы, 6 — недели.
+- [ ] 1.2 Дополнить `ZaiLimitEntry` полями `currentValue`, `usage`, `remaining`,
+      `usageDetails`, а `ZaiQuotaResponse.data` — полем `level`. Перевёрнутое именование
+      `usage` и `currentValue` описать комментарием прямо в коде: это самый лёгкий дефект
+      из тех, что заводятся заново.
+- [ ] 1.3 Добавить `isZaiWindowCap` (`TOKENS_LIMIT` или `CREDIT_LIMIT`) и `zaiKindFromUnit`:
+      часы — пятичасовое окно независимо от `number`, недели — недельное, месяцы
+      на `TIME_LIMIT` — MCP, месяцы на окне квоты — прочее, всё остальное неразрешено.
+- [ ] 1.4 Добавить `zaiKindsFromOrder(limits, now)`: кандидаты — только окна квоты, поэтому
+      ведущий `TIME_LIMIT` слота не занимает; горизонт вето шесть часов; отсутствие
+      `nextResetTime` кандидата не исключает; при отвергнутых всех кандидатах доверяем
+      порядку массива; карта ключуется индексом в полном массиве `limits`, чтобы
+      накладываться на него запись к записи.
+- [ ] 1.5 Добавить `zaiResolveKinds(limits, now)`: позиционную карту строить, только если
+      хотя бы одно окно квоты не разрешилось, причём `zaiKindFromUnit` всё равно побеждает
+      поэлементно.
+- [ ] 1.6 Добавить защитный `zaiLimitsOf(json)`, терпимый к null, значениям не-объектам,
+      `limits` не-массиву и элементам null или не-объектам, с ограничением числа
+      рассматриваемых записей.
+- [ ] 1.7 Использовать не больше двух окон квоты: первое занимает пятичасовой слот,
+      следующее — недельный, любое дальнейшее игнорируется.
 
-- [ ] 1.1 Remove `zaiUnitToMs`; it is unexported and its unit map is wrong (5 as minutes,
-      6 as days). Replace with constants: 3 = hours, 5 = months, 6 = weeks.
-- [ ] 1.2 Extend `ZaiLimitEntry` with `currentValue`, `usage`, `remaining`, `usageDetails`, and
-      `ZaiQuotaResponse.data` with `level`. Document the inverted `usage`/`currentValue` naming
-      inline — it is the single easiest defect to reintroduce.
-- [ ] 1.3 Add `isZaiWindowCap` (`TOKENS_LIMIT` or `CREDIT_LIMIT`) and `zaiKindFromUnit`: hours to
-      the 5-hour kind regardless of `number`, weeks to weekly, months on a `TIME_LIMIT` to MCP,
-      months on a window cap to other, everything else unresolved.
-- [ ] 1.4 Add `zaiKindsFromOrder(limits, now)`: candidates are window caps only, so a leading
-      `TIME_LIMIT` takes no slot; six-hour veto horizon; a missing `nextResetTime` keeps a
-      candidate eligible; array order is trusted when every candidate is vetoed; the map is keyed
-      by index into the full `limits` array so it zips back onto it entry for entry.
-- [ ] 1.5 Add `zaiResolveKinds(limits, now)`: build the positional map only when some window cap
-      is unresolved, with `zaiKindFromUnit` still winning per entry.
-- [ ] 1.6 Add a defensive `zaiLimitsOf(json)` tolerating null, non-objects, a non-array `limits`,
-      and null or non-object elements, and capping the number of entries considered.
-- [ ] 1.7 Use at most two window caps: the first fills the 5-hour slot, the next the weekly slot,
-      and any further cap is ignored.
+## 2. Утилизация, горизонты сброса и величины
 
-## 2. Utilization, reset horizons and amounts
+- [ ] 2.1 Выводить утилизацию из `currentValue / usage`, когда обе величины конечны,
+      а `usage` положителен, но только при схождении с `percentage` в пределах 1,5 п. п.;
+      иначе брать `percentage`. **Когда `percentage` отсутствует или не число — брать
+      отношение без сверки**: сравнение с нынешним умолчанием `percentage ?? 0` сообщило бы
+      0 % для совершенно исправного кредитного окна. `clamp01` сохранить.
+- [ ] 2.2 Добавить `zaiWindowSeconds(entry, kind)`: произведение единицы на число, где оно
+      разрешается, иначе пять часов или семь суток по виду окна.
+- [ ] 2.3 Добавить `zaiResetSeconds(entry, kind, nowSec)`: брать `nextResetTime` (эпоха
+      в миллисекундах), когда он в будущем и в пределах 400 суток, иначе откатываться
+      к длине окна. Для существующего окна ноль недопустим.
+- [ ] 2.4 Извлекать `billing`, `planLevel`, `credits5h`, `credits7d`. `remaining` передавать
+      без изменений и никогда не пересчитывать; израсходованное и полное отдавать даже
+      тогда, когда `remaining` отсутствует.
+- [ ] 2.5 Сделать `now` инъектируемым параметром `parseZaiQuota` с умолчанием на текущее
+      время.
+- [ ] 2.6 Сопоставлять утилизацию от 1 на любом из окон со статусом `denied`.
+- [ ] 2.7 Убедиться, что `parseZaiQuota` по-прежнему не бросает исключений ни на одном пути.
 
-- [ ] 2.1 Derive utilization from `currentValue / usage` when both are finite and `usage` is
-      positive, but only when it agrees with `percentage` within 1.5 pp; otherwise use
-      `percentage`. **When `percentage` is absent or not a number, use the ratio unguarded** —
-      comparing against the current `percentage ?? 0` default would report 0 % for a perfectly
-      good credit window. Keep `clamp01`.
-- [ ] 2.2 Add `zaiWindowSeconds(entry, kind)`: unit times number when resolvable, else five hours
-      or seven days by kind.
-- [ ] 2.3 Add `zaiResetSeconds(entry, kind, nowSec)`: use `nextResetTime` (epoch milliseconds)
-      when it is in the future and within 400 days, else fall back to the window length. Never
-      zero for a window that exists.
-- [ ] 2.4 Extract `billing`, `planLevel`, `credits5h`, `credits7d`. Pass `remaining` through
-      unchanged and never recompute it; expose used and total even when `remaining` is absent.
-- [ ] 2.5 Make `now` an injectable parameter of `parseZaiQuota`, defaulting to the current time.
-- [ ] 2.6 Map utilization at or above 1 on either window to the denied limit status.
-- [ ] 2.7 Confirm `parseZaiQuota` still cannot throw on any input path.
+## 3. Обработка отказов на уровне запроса
 
-## 3. Request-level failure handling
+- [ ] 3.1 Добавить `readZaiEnvelopeFailure(json)`: отказом считать только явный
+      `success: false`; сопоставлять `code` так, что 401, 403 и 429 проходят как есть,
+      1000 и 1001 дают 401, всё прочее — 502.
+- [ ] 3.2 Переписать цикл повторов в `fetchZaiQuota` так, чтобы он переключался по классу
+      отказа, а не по HTTP-статусу, — тогда запасной вариант с сырым токеном станет
+      достижим в реальной работе. Итоговый отказ определяется **последней** попыткой.
+- [ ] 3.3 Обернуть `response.json()` в try/catch: шлюзы и прокси отдают HTML со статусом 200.
+- [ ] 3.4 Бросать исключение, когда успешный конверт не несёт ни одного окна квоты, а не
+      сообщать 0 %.
+- [ ] 3.5 Никогда не включать `msg` конверта в сообщение об ошибке; описывать код конверта,
+      а не HTTP-статус, поскольку ответ действительно пришёл с HTTP 200.
 
-- [ ] 3.1 Add `readZaiEnvelopeFailure(json)`: only an explicit `success: false` is a failure; map
-      `code` with 401, 403 and 429 passing through, 1000 and 1001 to 401, anything else to 502.
-- [ ] 3.2 Rewrite the `fetchZaiQuota` retry loop to switch on failure class rather than HTTP
-      status, so the raw-token fallback becomes reachable in production. The class of the **last**
-      attempt decides the resulting failure.
-- [ ] 3.3 Wrap `response.json()` in try/catch — gateways and proxies return HTML with status 200.
-- [ ] 3.4 Throw when a successful envelope carries no window cap, rather than reporting 0 %.
-- [ ] 3.5 Never include the envelope `msg` in the thrown message; describe it as an envelope code
-      rather than an HTTP status, since the response really was HTTP 200.
+## 4. Пауза перед повтором и видимое состояние
 
-## 4. Authentication backoff and visible state
+- [ ] 4.1 Запоминать отказ класса «аутентификация» вместе со временем и подавлять дальнейшие
+      запросы квоты, пока не истечёт TTL кэша. Без этого исправление QF-4 превращает
+      отвергнутый ключ в два HTTP-запроса в минуту навсегда: кэш не пишется,
+      а `shouldCallApi` возвращает истину всякий раз, когда кэша нет.
+- [ ] 4.2 Сетевые и вышестоящие отказы так не подавлять — они преходящи.
+- [ ] 4.3 Добавить отдельный источник данных для отвергнутых учётных данных, отличный
+      от протухших и от режима только затрат, и показать его в статус-баре и дашборде.
+- [ ] 4.4 Добавить строки этого состояния во все бандлы l10n.
 
-- [ ] 4.1 Record an authentication-class failure with its timestamp and suppress further quota
-      requests until the cache TTL elapses. Without this the QF-4 fix turns a rejected key into
-      two HTTP requests per minute forever, because no cache is written and `shouldCallApi`
-      returns true whenever the cache is missing.
-- [ ] 4.2 Do not suppress network or upstream failures the same way — those are transient.
-- [ ] 4.3 Add a distinct data source for a rejected credential, separate from stale and
-      local-only, and surface it in the status bar and dashboard.
-- [ ] 4.4 Add the strings for that state to the l10n bundles (see the prerequisite above).
+## 5. Модель и хранение
 
-## 5. Model and persistence
-
-- [ ] 5.1 Extend `RateLimitData` with optional `billing`, `planLevel`, `credits5h` and
-      `credits7d`, plus the `QuotaBilling` and `QuotaAmounts` types (`src/data/apiClient.ts`).
-- [ ] 5.2 Carry the new fields through `ClaudeUsageData` and the merge in
+- [ ] 5.1 Дополнить `RateLimitData` необязательными `billing`, `planLevel`, `credits5h`
+      и `credits7d`, а также типами `QuotaBilling` и `QuotaAmounts`
+      (`src/data/apiClient.ts`).
+- [ ] 5.2 Протянуть новые поля через `ClaudeUsageData` и слияние в
       `DataManager.getUsageData` (`src/data/dataManager.ts`).
-- [ ] 5.3 Cache schema version 3 becomes 4: persist the credit amounts, plan tier and an explicit
-      `has7dLimit`. Extend `validateCacheFile` without weakening any existing range check, and
-      accept `planLevel` only as a short string, rejecting the record otherwise.
-- [ ] 5.4 Accept a version 3 record for reading (deriving `has7dLimit` the old way) while always
-      writing version 4, so two extension versions sharing the cache file cannot invalidate each
-      other's writes on every tick.
-- [ ] 5.5 Read `has7dLimit` from the cache directly in `cacheToRateLimitData` instead of inferring
-      it from a positive `reset7dAt` — that inference is always true (`src/data/dataManager.ts`).
-- [ ] 5.6 Leave `SNAPSHOT_VERSION` at 1. The new fields are optional and the existing validator
-      accepts them; bumping it would reject every snapshot and cost each user the instant
-      cold-start render.
+- [ ] 5.3 Версия схемы кэша 3 становится 4: сохранять величины кредитов, уровень тарифа
+      и явное `has7dLimit`. Дополнить `validateCacheFile`, не ослабляя ни одной действующей
+      проверки диапазонов, и принимать `planLevel` только как короткую строку, иначе
+      отвергать запись.
+- [ ] 5.4 Принимать запись версии 3 на чтение (выводя `has7dLimit` по-старому), но писать
+      всегда версию 4, чтобы две версии расширения на одном файле кэша не обесценивали
+      записи друг друга на каждом тике.
+- [ ] 5.5 Читать `has7dLimit` из кэша напрямую в `cacheToRateLimitData`, а не выводить его
+      из положительного `reset7dAt` — этот вывод всегда истинен
+      (`src/data/dataManager.ts`).
+- [ ] 5.6 Оставить `SNAPSHOT_VERSION` равной 1. Новые поля необязательны, действующий
+      валидатор их принимает, а подъём версии отверг бы все снапшоты и стоил бы каждому
+      пользователю мгновенной отрисовки при холодном старте.
 
-## 6. Dashboard
+## 6. Дашборд
 
-- [ ] 6.1 Render the absolute amounts beside the 5-hour and weekly bars when present, showing used
-      and total, and the remaining amount only when the API sent it. Hide the block entirely
-      otherwise (`src/webview/panel.ts`).
-- [ ] 6.2 Render the plan tier badge when `planLevel` is present, escaped through the panel's
-      existing `esc()`.
-- [ ] 6.3 Add the new strings to every l10n bundle — the locale parity test enforces this once the
-      prerequisite merge has landed.
+- [ ] 6.1 Рисовать абсолютные величины рядом с полосами пятичасового и недельного окон:
+      израсходованное и полное, а остаток — только если API его прислал. В остальных
+      случаях блок полностью скрывать (`src/webview/panel.ts`).
+- [ ] 6.2 Рисовать значок уровня тарифа, когда `planLevel` задан, экранируя его имеющимся
+      в панели `esc()`.
+- [ ] 6.3 Добавить новые строки во все бандлы l10n — паритет проверяет `locale.test.ts`.
 
-## 7. Tests, z.ai
+## 7. Тесты, z.ai
 
-- [ ] 7.1 TEST: introduce a fixed `NOW` constant in `providerDetection.test.ts` and pass it to
-      every new parser call; the existing fixtures rely on wall-clock slack.
-- [ ] 7.2 TEST: live credit-tariff fixture — utilization about 0.596 and 0.3406, weekly window
-      present, credit billing, tier max, amounts 16693, 28000 and 11306. This is the primary
-      regression: the tariff currently reports zeros throughout.
-- [ ] 7.3 TEST: live token-tariff fixture — 5-hour utilization 0 with a fallback horizon of about
-      18000 s, weekly utilization 1, denied status, token billing, no credit amounts.
-- [ ] 7.4 TEST: a leading `TIME_LIMIT` at 99 % claims no quota window and raises no warning.
-- [ ] 7.5 TEST: amounts present with no `percentage` yield the derived ratio, not zero; amounts
-      without `remaining` still expose used and total.
-- [ ] 7.6 TEST: payloads without a unit — order-based classification, weekly window present, a
-      weekly cap resetting sooner keeps its slot, a distant first candidate is vetoed, all
-      candidates vetoed falls back to array order, two idle caps keep array order, a single cap
-      reports no weekly window, a third cap is ignored.
-- [ ] 7.7 TEST: a mixed payload (one entry with a unit, one without), an undocumented unit 2, and
-      a month-period window cap that takes no slot.
-- [ ] 7.8 TEST: reset times in the past and 500 days out both fall back to the window length, and
-      a weekly fallback is seven days rather than one.
-- [ ] 7.9 TEST: envelope handling — code 1000 retries then throws, code 500 throws without
-      retrying, an auth failure followed by a non-auth failure reports the latter, an omitted
-      `success` parses, a 200 carrying only `TIME_LIMIT` throws, and a non-JSON body throws.
-- [ ] 7.10 TEST: hostile input (null, a string, a number, a non-array `limits`, null and
-      non-object elements, an oversized array) yields zeros without throwing.
-- [ ] 7.11 TEST: an authentication failure suppresses the next request until the TTL elapses,
-      while a network failure does not.
-- [ ] 7.12 TEST: the six existing z.ai tests stay green. Their `{ unit: 6, number: 7 }` fixtures
-      may be corrected to `number: 1` — under the fixed unit map they currently describe a
-      seven-week window, which no tariff offers. This is a data correction, not a weakening.
+- [ ] 7.1 TEST: ввести в `providerDetection.test.ts` фиксированную константу `NOW`
+      и передавать её в каждый новый вызов парсера: действующие фикстуры опираются
+      на люфт системных часов.
+- [ ] 7.2 TEST: живая фикстура кредитного тарифа — утилизация около 0,596 и 0,3406,
+      недельное окно есть, тарификация кредитная, уровень `max`, величины 16 693, 28 000
+      и 11 306. Это основной регрессионный тест: сейчас такой тариф целиком отдаёт нули.
+- [ ] 7.3 TEST: живая фикстура токенного тарифа — пятичасовая утилизация 0 с запасным
+      горизонтом около 18 000 с, недельная утилизация 1, статус `denied`, тарификация
+      токенная, величин кредитов нет.
+- [ ] 7.4 TEST: ведущий `TIME_LIMIT` на 99 % не занимает окна квоты и не поднимает
+      предупреждения.
+- [ ] 7.5 TEST: величины без `percentage` дают выведенное отношение, а не ноль; величины
+      без `remaining` всё равно отдают израсходованное и полное.
+- [ ] 7.6 TEST: ответы без единицы периода — разбор по порядку, недельное окно есть,
+      недельный лимит со сбросом раньше сохраняет слот, далёкий первый кандидат
+      отвергается, отвергнутые все кандидаты возвращают разбор к порядку массива, два
+      простаивающих окна сохраняют порядок, единственное окно означает отсутствие
+      недельного, третье окно игнорируется.
+- [ ] 7.7 TEST: смешанный ответ (одна запись с единицей, другая без), недокументированная
+      единица 2 и окно квоты с месячным периодом, не занимающее слот.
+- [ ] 7.8 TEST: времена сброса в прошлом и на 500 суток вперёд откатываются к длине окна,
+      а недельный откат равен семи суткам, а не одним.
+- [ ] 7.9 TEST: работа с конвертом — код 1000 повторяет попытку и затем бросает, код 500
+      бросает без повтора, отказ аутентификации с последующим отказом другого класса
+      сообщается как последний, опущенный `success` разбирается, ответ 200 с одним лишь
+      `TIME_LIMIT` бросает, тело не-JSON бросает.
+- [ ] 7.10 TEST: враждебный вход (null, строка, число, `limits` не-массив, элементы null
+      и не-объекты, слишком длинный массив) даёт нули без исключения.
+- [ ] 7.11 TEST: отказ аутентификации подавляет следующий запрос до истечения TTL, а сетевой
+      отказ — нет.
+- [ ] 7.12 TEST: шесть действующих тестов z.ai остаются зелёными. Их фикстуры
+      `{ unit: 6, number: 7 }` допустимо исправить на `number: 1`: при выправленной карте
+      единиц они описывают семинедельное окно, которого нет ни в одном тарифе. Это
+      исправление данных, а не ослабление проверки.
 
-## 8. Tests, Anthropic regression
+## 8. Тесты, регрессия Anthropic
 
-- [ ] 8.1 Add an injectable `fetchImpl` to `fetchRateLimitData`, mirroring `fetchZaiQuota`. The
-      Anthropic header path has no test coverage today and cannot be asserted without it.
-- [ ] 8.2 TEST: new `src/test/suite/anthropicRateLimit.test.ts` covering header parsing, reset
-      times read as Unix seconds, the denied status, a missing 7-day header reporting no weekly
-      window, and malformed header values clamping to zero without throwing.
-- [ ] 8.3 TEST: the z.ai-only fields stay absent on Anthropic results.
-- [ ] 8.4 TEST: a cache v4 round-trip preserves `has7dLimit` as false for a plan without a weekly
-      window and true for one with it — the fix for the always-true inference — and preserves the
-      credit amounts, plan tier and billing model.
-- [ ] 8.5 TEST: a version 3 record is accepted for reading and rewritten as version 4; a record
-      with an out-of-range utilization or unknown status is still rejected at either version.
-- [ ] 8.6 TEST: the dashboard hides the amounts block and tier badge when the fields are absent,
-      for both Anthropic and the token tariff (`panel.test.ts`).
-- [ ] 8.7 Update the version fixtures that this change necessarily invalidates: `cache.test.ts`
-      lines 9 and 25 (`version: 3`). `snapshotCache.test.ts` needs no change, because the snapshot
-      schema is deliberately unchanged.
-- [ ] 8.8 Confirm the statusBar, notificationDecision, prediction and locale suites pass
-      unmodified. Any of these needing edits means the contract moved wider than intended — stop
-      and reassess rather than adjusting the test. (`cache.test.ts` is excluded from this rule by
-      8.7; its edit is a schema-version fixture, not a behavioural expectation.)
+- [ ] 8.1 Добавить инъектируемый `fetchImpl` в `fetchRateLimitData` по образцу
+      `fetchZaiQuota`. Путь разбора заголовков Anthropic сегодня не покрыт тестами вовсе
+      и без этого не проверяется.
+- [ ] 8.2 TEST: новый `src/test/suite/anthropicRateLimit.test.ts` — разбор заголовков,
+      времена сброса как секунды эпохи Unix, статус `denied`, отсутствие семидневного
+      заголовка означает отсутствие недельного окна, испорченные значения заголовков
+      ограничиваются нулём без исключения.
+- [ ] 8.3 TEST: специфичные для z.ai поля остаются пустыми в результатах Anthropic.
+- [ ] 8.4 TEST: круговой прогон через кэш v4 сохраняет `has7dLimit` ложным для тарифа без
+      недельного окна и истинным для тарифа с ним — это и есть исправление всегда истинного
+      вывода, — а также сохраняет величины кредитов, уровень тарифа и модель тарификации.
+- [ ] 8.5 TEST: запись версии 3 принимается на чтение и переписывается версией 4; запись
+      с утилизацией вне диапазона или неизвестным статусом по-прежнему отвергается в любой
+      версии.
+- [ ] 8.6 TEST: дашборд скрывает блок величин и значок уровня, когда поля отсутствуют, —
+      и для Anthropic, и для токенного тарифа (`panel.test.ts`).
+- [ ] 8.7 Обновить версионные фикстуры, которые изменение неизбежно обесценивает:
+      `cache.test.ts`, строки 9 и 25 (`version: 3`). `snapshotCache.test.ts` править
+      не требуется, поскольку схема снапшота намеренно не меняется.
+- [ ] 8.8 Убедиться, что наборы statusBar, notificationDecision, prediction и locale
+      проходят без правок. Если какому-то из них правки понадобятся — значит контракт
+      поехал шире задуманного, и надо остановиться и пересмотреть, а не подправлять тест.
+      (`cache.test.ts` выведен из-под этого правила пунктом 8.7: там меняется фикстура
+      версии схемы, а не ожидание по поведению.)
 
-## 9. Docs and changelog
+## 9. Документация и changelog
 
-- [ ] 9.1 Add a z.ai quota section to `docs/DATA.md`: both payload generations, the inverted
-      `usage`/`currentValue` naming, and why order beats reset time for window identification.
-- [ ] 9.2 Add an Unreleased entry to `CHANGELOG.md`, calling out that older z.ai tariffs start
-      showing a weekly row and weekly notifications, that an exhausted window now shows red, that
-      a rejected key is reported as such, and that Anthropic Pro users stop seeing a phantom
-      weekly row.
-- [ ] 9.3 Confirm `.env` is git-ignored so the manual-check tokens cannot be committed.
+- [ ] 9.1 Добавить в `docs/DATA.md` раздел о квоте z.ai: оба поколения ответа, перевёрнутое
+      именование `usage` и `currentValue`, и почему порядок важнее времени сброса при
+      определении окон.
+- [ ] 9.2 Добавить запись в `## [Unreleased]` в `CHANGELOG.md`: на прежних тарифах z.ai
+      появятся недельная строка и недельные уведомления, исчерпанное окно теперь красное,
+      отвергнутый ключ называется отвергнутым, у пользователей Anthropic Pro исчезает
+      фантомная недельная строка.
+- [ ] 9.3 Убедиться, что `.env` игнорируется git и токены для ручной проверки не могут
+      попасть в коммит.
 
-## 10. Verification
+## 10. Проверка
 
-- [ ] 10.1 `npm run lint` and `npm test` pass.
-- [ ] 10.2 Owner-only, not a blocker for the rest: run both live tokens through the new parser and
-      reconcile against the z.ai subscription dashboard. The payloads captured for 7.2 and 7.3 are
-      the durable form of this check.
-- [ ] 10.3 Extension Dev Host on the credit tariff: real percentages, credit amounts, tier badge,
-      and a rendered prediction chart. Then an invalid token: the rejected-credential state, with
-      no request storm on the 60-second timer.
-- [ ] 10.4 `openspec validate support-zai-quota-formats --strict` passes.
+- [ ] 10.1 `npm run lint` и `npm test` проходят.
+- [ ] 10.2 Только для владельца токенов, остальную работу не блокирует: прогнать оба живых
+      токена через новый парсер и сверить с панелью подписки z.ai. Снятые для 7.2 и 7.3
+      ответы — долговечная форма этой проверки.
+- [ ] 10.3 Extension Dev Host на кредитном тарифе: настоящие проценты, величины кредитов,
+      значок уровня, отрисованный график прогноза. Затем неверный токен: состояние
+      отвергнутых учётных данных без шквала запросов на шестидесятисекундном таймере.
+- [ ] 10.4 `openspec validate support-zai-quota-formats --strict` проходит.
