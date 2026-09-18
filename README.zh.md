@@ -10,7 +10,7 @@
 [![Installs](https://img.shields.io/visual-studio-marketplace/i/max-riabov.claude-glm-usage.png?label=Installs)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
 [![Rating](https://img.shields.io/visual-studio-marketplace/r/max-riabov.claude-glm-usage.png?label=Rating)](https://marketplace.visualstudio.com/items?itemName=max-riabov.claude-glm-usage)
 
-🌐 [English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+🌐 [English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Русский](README.ru.md)
 
 </div>
 

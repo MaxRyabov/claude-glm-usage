@@ -11,6 +11,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.0] — 2026-07-09
+
+### Added
+
+- **Russian (ru) localization.** The status bar, notifications, dashboard and all manifest strings
+  (command titles, setting descriptions) now render in Russian when the VS Code display language is
+  `ru`. Adds `package.nls.ru.json`, `l10n/bundle.l10n.ru.json` and a translated `README.ru.md`.
+  Introduces a locale key-parity test (`src/test/suite/locale.test.ts`) that keeps every language
+  bundle in sync with the base.
+
+---
+
 ## [1.0.1] — 2026-07-08
 
 ### Fixed
