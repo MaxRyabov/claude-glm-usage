@@ -102,5 +102,9 @@
   "Less than 30 min remaining. Wrap up current task.": "Осталось менее 30 мин. Завершайте текущую задачу.",
   "Less than 10 min remaining. Save your work and pause.": "Осталось менее 10 мин. Сохраните работу и сделайте паузу.",
   "Rate limit reached. Wait for reset.": "Лимит достигнут. Дождитесь сброса.",
-  "msgs": "сообщ."
+  "msgs": "сообщ.",
+  "🤖 API key rejected": "🤖 Ключ API отвергнут",
+  "The provider rejected your API key.\\nCheck ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "Провайдер отверг ваш ключ API.\\nПроверьте ANTHROPIC_AUTH_TOKEN в ~/.claude/settings.json",
+  "credits used of": "кредитов из",
+  "left": "осталось"
 }

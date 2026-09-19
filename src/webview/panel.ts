@@ -87,6 +87,8 @@ function buildI18n(): Record<string, string> {
     more:                  t('More'),
     avgByHour:             t('Avg cost by hour of day (last 30 days)'),
     resetsIn:              t('resets in'),
+    creditsUsedOf:         t('credits used of'),
+    creditsLeft:           t('left'),
     calculating:           t('Calculating…'),
     cacheTtl:              t('Cache TTL'),
     limitIn5hCritical:     t('⛔ 5h limit in ~'),
@@ -211,6 +213,21 @@ export function getWebviewContent(
       border-radius: 4px;
       background-color: var(--vscode-progressBar-background);
       transition: width 0.3s ease;
+    }
+    .amounts {
+      margin-top: 3px;
+      font-size: 0.85em;
+      opacity: 0.75;
+      text-align: right;
+    }
+    .plan-badge {
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 0.75em;
+      text-transform: uppercase;
+      background-color: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
     }
     .progress-fill.warning { background-color: var(--vscode-editorWarning-foreground); }
     .progress-fill.error   { background-color: var(--vscode-editorError-foreground); }
@@ -417,7 +434,10 @@ export function getWebviewContent(
 
   <!-- Current Usage -->
   <div class="card">
-    <div class="card-title">${i18n.currentUsage}</div>
+    <div class="card-title">
+      ${i18n.currentUsage}
+      <span class="plan-badge" id="plan-badge" style="display:none"></span>
+    </div>
     <div class="progress-row">
       <div class="progress-labels">
         <span>${i18n.window5h}</span>
@@ -426,6 +446,7 @@ export function getWebviewContent(
       <div class="progress-track">
         <div class="progress-fill" id="usage-5h-fill" style="width:0%"></div>
       </div>
+      <div class="amounts" id="usage-5h-amounts" style="display:none"></div>
     </div>
     <div class="progress-row" id="usage-7d-row">
       <div class="progress-labels">
@@ -435,6 +456,7 @@ export function getWebviewContent(
       <div class="progress-track">
         <div class="progress-fill" id="usage-7d-fill" style="width:0%"></div>
       </div>
+      <div class="amounts" id="usage-7d-amounts" style="display:none"></div>
     </div>
   </div>
 
@@ -629,6 +651,18 @@ export function getWebviewContent(
         const fill7d = document.getElementById('usage-7d-fill');
         fill7d.style.width = Math.min(100, usage.utilization7d * 100) + '%';
         fill7d.className = 'progress-fill' + (usage.utilization7d >= 0.75 ? ' warning' : '');
+      }
+
+      // Absolute credit amounts and plan tier: credit-based z.ai tariffs only. Token tariffs
+      // report a percentage and nothing else, and no other provider reports either — so both
+      // are driven purely by presence, never by provider name.
+      renderAmounts('usage-5h-amounts', hasRateData ? usage.credits5h : null);
+      renderAmounts(show7d ? 'usage-7d-amounts' : null, hasRateData ? usage.credits7d : null);
+      const badge = document.getElementById('plan-badge');
+      if (badge) {
+        const level = hasRateData ? usage.planLevel : null;
+        badge.style.display = level ? '' : 'none';
+        badge.textContent = level ? String(level) : '';
       }
 
       document.getElementById('cost-5h').textContent  = '$' + usage.cost5h.toFixed(2);
@@ -1204,6 +1238,32 @@ export function getWebviewContent(
           });
         }
       }
+    }
+
+    // "16 693 credits used of 28 000 — 11 306 left". The remaining amount is optional: z.ai
+    // does not always send it, and it must never be recomputed from the other two, because
+    // upstream rounds it (28000 - 16693 = 11307 arrives as 11306, credits being fractional).
+    function renderAmounts(elementId, amounts) {
+      if (!elementId) { return; }
+      const el = document.getElementById(elementId);
+      if (!el) { return; }
+      if (!amounts || typeof amounts.used !== 'number' || typeof amounts.total !== 'number') {
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+      }
+      const parts = [
+        num(amounts.used) + ' ' + i18n.creditsUsedOf + ' ' + num(amounts.total),
+      ];
+      if (typeof amounts.remaining === 'number') {
+        parts.push(num(amounts.remaining) + ' ' + i18n.creditsLeft);
+      }
+      el.style.display = '';
+      el.textContent = parts.join(' — ');
+    }
+
+    function num(v) {
+      return Math.round(v).toLocaleString();
     }
 
     // Minimal HTML escape to prevent XSS from data strings

@@ -47,6 +47,9 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
   if (dataSource === 'no-data') {
     return vscode.l10n.t('🤖 Claude: run refresh');
   }
+  if (dataSource === 'auth-rejected') {
+    return vscode.l10n.t('🤖 API key rejected');
+  }
 
   const isStale = dataSource === 'stale';
   const staleSuffix = isStale ? ` [${formatDuration(cacheAge)} ago]` : '';
@@ -110,6 +113,9 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
   if (dataSource === 'no-data') {
     return vscode.l10n.t('No usage data found.\nClick to open dashboard →');
   }
+  if (dataSource === 'auth-rejected') {
+    return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json');
+  }
 
   const lastUpdated = cacheAge < 60
     ? vscode.l10n.t('just now')
@@ -163,7 +169,9 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
 function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
   const { limitStatus, dataSource, providerType } = data;
 
-  if (dataSource === 'no-credentials') {
+  // A refused credential is the user's problem to fix, so it gets the error colour rather
+  // than the muted one used for data that is merely stale.
+  if (dataSource === 'no-credentials' || dataSource === 'auth-rejected') {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     item.color = new vscode.ThemeColor('statusBarItem.errorForeground');
     return;
