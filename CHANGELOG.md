@@ -30,6 +30,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for every provider. It is now stored explicitly.
 - **An exhausted z.ai window showed amber, not red.** The limit status could never reach
   "denied" for z.ai, so a spent quota looked the same as one at 76 %.
+- **A denied quota was attributed to the wrong window.** The status bar printed a flat
+  "5h:100%✗" and hid the weekly row whenever the limit was denied. That held for Anthropic,
+  whose denial comes from the 5-hour status header, but a z.ai account exhausted on its weekly
+  window would be told its 5-hour window was spent while it was in fact empty. The mark and the
+  red bar now go on the window that actually reached the limit, in both the status bar and the
+  dashboard.
 - The period unit map read weeks as days, making the weekly fallback reset horizon seven times
   too short.
 

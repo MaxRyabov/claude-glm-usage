@@ -625,23 +625,28 @@ export function getWebviewContent(
             '$' + usage.cost7d.toFixed(2) + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
         }
       } else {
-        // percent mode — claude-ai only
-        const warn5h = usage.utilization5h >= 0.75 ? ' ⚠' : '';
-        const deniedFlag = denied ? '✗' : '';
+        // percent mode — claude-ai and z-ai. The denial mark belongs on the window that is
+        // actually spent: z.ai denies on whichever window reaches 100%, and a live token
+        // tariff sits at 100% weekly with an empty 5-hour window. Anthropic denies through
+        // its 5-hour status header, which can arrive without either window reaching 100%,
+        // so that case keeps the mark on the 5-hour window.
+        const deniedWithoutFullWindow =
+          denied && usage.utilization5h < 1 && !(show7d && usage.utilization7d >= 1);
         document.getElementById('usage-5h-label').textContent =
-          pct(usage.utilization5h) + warn5h + deniedFlag + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h);
+          pct(usage.utilization5h) + mark(usage.utilization5h, deniedWithoutFullWindow) +
+          ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h);
         if (show7d) {
-          const warn7d = usage.utilization7d >= 0.75 ? ' ⚠' : '';
           document.getElementById('usage-7d-label').textContent =
-            pct(usage.utilization7d) + warn7d + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
+            pct(usage.utilization7d) + mark(usage.utilization7d, false) +
+            ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
         }
       }
 
+      const denied5h = denied && (usage.utilization5h >= 1 || !(show7d && usage.utilization7d >= 1));
       const fill5h = document.getElementById('usage-5h-fill');
       if (hasRateData) {
         fill5h.style.width = Math.min(100, usage.utilization5h * 100) + '%';
-        fill5h.className = 'progress-fill' +
-          (denied ? ' error' : usage.utilization5h >= 0.75 ? ' warning' : '');
+        fill5h.className = 'progress-fill' + fillClassFor(usage.utilization5h, denied5h);
       } else {
         fill5h.style.width = '0%';
         fill5h.className = 'progress-fill';
@@ -650,7 +655,7 @@ export function getWebviewContent(
       if (show7d) {
         const fill7d = document.getElementById('usage-7d-fill');
         fill7d.style.width = Math.min(100, usage.utilization7d * 100) + '%';
-        fill7d.className = 'progress-fill' + (usage.utilization7d >= 0.75 ? ' warning' : '');
+        fill7d.className = 'progress-fill' + fillClassFor(usage.utilization7d, denied && usage.utilization7d >= 1);
       }
 
       // Absolute credit amounts and plan tier: credit-based z.ai tariffs only. Token tariffs
@@ -1264,6 +1269,16 @@ export function getWebviewContent(
 
     function num(v) {
       return Math.round(v).toLocaleString();
+    }
+
+    function mark(utilization, forceDenied) {
+      if (utilization >= 1 || forceDenied) { return '✗'; }
+      return utilization >= 0.75 ? ' ⚠' : '';
+    }
+
+    function fillClassFor(utilization, isDenied) {
+      if (isDenied || utilization >= 1) { return ' error'; }
+      return utilization >= 0.75 ? ' warning' : '';
     }
 
     // Minimal HTML escape to prevent XSS from data strings
