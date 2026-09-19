@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { fetchRateLimitData } from '../../data/apiClient';
-import { AuthBackoff } from '../../data/authBackoff';
+import { PollBackoff } from '../../data/authBackoff';
 
 /**
  * The Anthropic header path had no test coverage at all before this change, while the change
@@ -101,35 +101,51 @@ suite('Anthropic rate-limit headers', () => {
   });
 });
 
-suite('Authentication backoff', () => {
+suite('Poll backoff', () => {
   const TTL = 300;
   const T0 = 1_800_000_000_000;
 
   test('a recorded rejection suppresses the next poll', () => {
-    const b = new AuthBackoff<string>();
+    const b = new PollBackoff<string>();
     assert.strictEqual(b.isActive('z-ai', TTL, T0), false);
-    b.record('z-ai', T0);
+    b.record('z-ai', 'credentials', T0);
     assert.strictEqual(b.isActive('z-ai', TTL, T0 + 60_000), true);
   });
 
   test('suppression expires once the TTL has elapsed', () => {
-    const b = new AuthBackoff<string>();
-    b.record('z-ai', T0);
+    const b = new PollBackoff<string>();
+    b.record('z-ai', 'credentials', T0);
     assert.strictEqual(b.isActive('z-ai', TTL, T0 + TTL * 1000), false);
     // Self-clearing, so a recovered key resumes polling rather than staying suppressed.
     assert.strictEqual(b.isActive('z-ai', TTL, T0 + 1), false);
   });
 
   test('suppression is per provider', () => {
-    const b = new AuthBackoff<string>();
-    b.record('z-ai', T0);
+    const b = new PollBackoff<string>();
+    b.record('z-ai', 'credentials', T0);
     assert.strictEqual(b.isActive('claude-ai', TTL, T0 + 1000), false);
   });
 
   test('a successful poll clears it', () => {
-    const b = new AuthBackoff<string>();
-    b.record('z-ai', T0);
+    const b = new PollBackoff<string>();
+    b.record('z-ai', 'credentials', T0);
     b.clear();
     assert.strictEqual(b.isActive('z-ai', TTL, T0 + 1000), false);
+  });
+
+  test('a format drift suppresses polling without blaming the credential', () => {
+    // A payload we cannot parse will not parse in sixty seconds either, so it backs off — but
+    // it is not the user's key, and the interface must not say it is.
+    const b = new PollBackoff<string>();
+    b.record('z-ai', 'format', T0);
+    assert.strictEqual(b.isActive('z-ai', TTL, T0 + 60_000), true);
+    assert.strictEqual(b.activeReason('z-ai', TTL, T0 + 60_000), 'format');
+  });
+
+  test('the reason distinguishes the two classes', () => {
+    const b = new PollBackoff<string>();
+    b.record('z-ai', 'credentials', T0);
+    assert.strictEqual(b.activeReason('z-ai', TTL, T0 + 1000), 'credentials');
+    assert.strictEqual(b.activeReason('z-ai', TTL, T0 + TTL * 1000), null);
   });
 });

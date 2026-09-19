@@ -206,7 +206,7 @@ suite('Cache schema v4', () => {
   });
 
   test('still rejects the abandoned versions and out-of-range values', () => {
-    assert.strictEqual(validateCacheFile(base({}) && { ...(base({}) as object), version: 2 }), null);
+    assert.strictEqual(validateCacheFile({ ...(base({}) as object), version: 2 }), null);
     assert.strictEqual(validateCacheFile(base({ utilization5h: 1.5 })), null);
     assert.strictEqual(validateCacheFile(base({ limitStatus: 'unknown' })), null);
     assert.strictEqual(validateCacheFile(base({ utilization7d: NaN })), null);
@@ -249,8 +249,11 @@ suite('Cache schema v4', () => {
       assert.strictEqual(weekly?.usageData.planLevel, 'max');
       assert.deepStrictEqual(weekly?.usageData.credits5h, { used: 269, total: 28000, remaining: 27730 });
     } finally {
-      if (saved !== null) { fs.writeFileSync(cachePath, saved); }
-      else { try { fs.unlinkSync(cachePath); } catch { /* ignore */ } }
+      // Guarded like the M-1 suite above: a failed restore must not mask a failed assertion.
+      try {
+        if (saved !== null) { fs.writeFileSync(cachePath, saved); }
+        else { fs.unlinkSync(cachePath); }
+      } catch { /* ignore restore failures */ }
     }
   });
 });

@@ -87,8 +87,11 @@ function buildI18n(): Record<string, string> {
     more:                  t('More'),
     avgByHour:             t('Avg cost by hour of day (last 30 days)'),
     resetsIn:              t('resets in'),
-    creditsUsedOf:         t('credits used of'),
-    creditsLeft:           t('left'),
+    // Whole phrases with placeholders, not fragments joined at render time: a translator has
+    // to be able to reorder the words, and Russian needs the number and the noun apart —
+    // "1 кредитов" and "2 кредитов" are both wrong for a concatenated form.
+    creditsUsage:          t('{0} of {1} credits used', '__N__', '__N2__'),
+    creditsUsageLeft:      t('{0} of {1} credits used — {2} left', '__N__', '__N2__', '__N3__'),
     calculating:           t('Calculating…'),
     cacheTtl:              t('Cache TTL'),
     limitIn5hCritical:     t('⛔ 5h limit in ~'),
@@ -1257,14 +1260,13 @@ export function getWebviewContent(
         el.textContent = '';
         return;
       }
-      const parts = [
-        num(amounts.used) + ' ' + i18n.creditsUsedOf + ' ' + num(amounts.total),
-      ];
-      if (typeof amounts.remaining === 'number') {
-        parts.push(num(amounts.remaining) + ' ' + i18n.creditsLeft);
-      }
+      const hasRemaining = typeof amounts.remaining === 'number';
+      const tmpl = hasRemaining ? i18n.creditsUsageLeft : i18n.creditsUsage;
       el.style.display = '';
-      el.textContent = parts.join(' — ');
+      el.textContent = tmpl
+        .replace('__N__', num(amounts.used))
+        .replace('__N2__', num(amounts.total))
+        .replace('__N3__', hasRemaining ? num(amounts.remaining) : '');
     }
 
     function num(v) {

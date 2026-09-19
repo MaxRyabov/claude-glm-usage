@@ -121,7 +121,7 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
     return vscode.l10n.t('No usage data found.\nClick to open dashboard →');
   }
   if (dataSource === 'auth-rejected') {
-    return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json');
+    return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json');
   }
 
   const lastUpdated = cacheAge < 60

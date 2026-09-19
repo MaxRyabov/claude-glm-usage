@@ -1,19 +1,13 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { RateLimitData, QuotaBilling } from './apiClient';
+import { RateLimitData, QuotaAmounts, QuotaBilling } from './apiClient';
 import { atomicWriteJson } from './atomicWrite';
 
 /** Current on-disk schema. v3 is still accepted for reading — see `validateCacheFile`. */
 const CACHE_VERSION = 4;
 /** `planLevel` is a free-form string from an external API; bound it before it reaches disk. */
 const MAX_LEVEL_LENGTH = 32;
-
-interface CachedAmounts {
-  used: number
-  total: number
-  remaining?: number
-}
 
 interface CacheFile {
   version: 3 | 4
@@ -37,8 +31,10 @@ interface CacheFile {
     has7dLimit?: boolean
     billing?: QuotaBilling
     planLevel?: string
-    credits5h?: CachedAmounts
-    credits7d?: CachedAmounts
+    // Reuses QuotaAmounts rather than restating it: a second copy of the shape would
+    // drift the moment a field is added on the apiClient side.
+    credits5h?: QuotaAmounts
+    credits7d?: QuotaAmounts
   }
 }
 
@@ -47,7 +43,7 @@ function getCachePath(): string {
 }
 
 /** Optional absolute amounts: present and well-formed, or absent. Anything else is corrupt. */
-function validateAmounts(v: unknown): CachedAmounts | null | 'invalid' {
+function validateAmounts(v: unknown): QuotaAmounts | null | 'invalid' {
   if (v === undefined) { return null; }
   if (!v || typeof v !== 'object') { return 'invalid'; }
   const a = v as Record<string, unknown>;
@@ -55,7 +51,7 @@ function validateAmounts(v: unknown): CachedAmounts | null | 'invalid' {
   if (typeof a.total !== 'number' || !isFinite(a.total) || a.total <= 0) { return 'invalid'; }
   if (a.remaining !== undefined &&
       (typeof a.remaining !== 'number' || !isFinite(a.remaining))) { return 'invalid'; }
-  return a as unknown as CachedAmounts;
+  return a as unknown as QuotaAmounts;
 }
 
 /**
@@ -154,5 +150,5 @@ export function getCacheAge(cache: CacheFile): number {
   return (Date.now() - new Date(cache.updatedAt).getTime()) / 1000;
 }
 
-export type { CacheFile, CachedAmounts };
+export type { CacheFile };
 export { CACHE_VERSION };

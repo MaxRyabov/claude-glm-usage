@@ -12,6 +12,7 @@ import {
   RateLimitData,
   ClaudeProvider,
   ZaiAuthError,
+  ZaiFormatError,
   QuotaAmounts,
   QuotaBilling,
 } from './apiClient';
@@ -22,7 +23,7 @@ import { computePrediction, PredictionData } from './prediction';
 import { getHeatmapData as computeHeatmapData, HeatmapData } from '../webview/heatmap';
 import { loadPersistedCache, persistCache } from './entryCache';
 import { readSnapshot, writeSnapshot } from './snapshotCache';
-import { AuthBackoff } from './authBackoff';
+import { PollBackoff } from './authBackoff';
 import { config } from '../config';
 
 export { PredictionData, HeatmapData };
@@ -75,7 +76,7 @@ export class DataManager {
    * because the case this protects against is a window sitting idle for hours. An explicit
    * user-driven refresh deliberately bypasses it.
    */
-  private readonly authBackoff = new AuthBackoff<ClaudeProvider>();
+  private readonly pollBackoff = new PollBackoff<ClaudeProvider>();
   private readonly _onDidUpdate = new vscode.EventEmitter<ClaudeUsageData>();
   readonly onDidUpdate: vscode.Event<ClaudeUsageData> = this._onDidUpdate.event;
 
@@ -178,13 +179,16 @@ export class DataManager {
                 ? await this.fetchZaiRateLimit()
                 : await fetchRateLimitData(config.credentialsPath);
               await writeCache(rateLimitData, providerType);
-              this.authBackoff.clear();
+              this.pollBackoff.clear();
               dataSource = 'api';
             }
           } catch (err) {
             // missing token/credentials or network error — fall back to cache, else cost-only
             const rejected = err instanceof ZaiAuthError;
-            if (rejected) { this.authBackoff.record(providerType); }
+            // A payload we cannot parse will not parse in sixty seconds either, so it backs
+            // off like a refused key. Network and upstream faults stay retryable.
+            if (rejected) { this.pollBackoff.record(providerType, 'credentials'); }
+            else if (err instanceof ZaiFormatError) { this.pollBackoff.record(providerType, 'format'); }
             if (cache) {
               rateLimitData = this.cacheToRateLimitData(cache.usageData);
               dataSource = rejected
@@ -286,7 +290,7 @@ export class DataManager {
     // A refused credential suppresses polling for one TTL. Network and upstream failures are
     // deliberately NOT suppressed this way — those are transient and worth retrying, whereas
     // a revoked key will still be revoked in five minutes.
-    if (this.isAuthRejectionActive(providerType)) { return false; }
+    if (this.isPollSuppressed(providerType)) { return false; }
     if (!cache) { return true; }
     if (!isCacheValid(cache, config.cacheTtlSeconds)) {
       return await wasJsonlUpdatedRecently(300);
@@ -294,8 +298,13 @@ export class DataManager {
     return false;
   }
 
+  /** Whether the CREDENTIAL rejection is what is currently suppressing polling. */
   private isAuthRejectionActive(providerType: ClaudeProvider): boolean {
-    return this.authBackoff.isActive(providerType, config.cacheTtlSeconds);
+    return this.pollBackoff.activeReason(providerType, config.cacheTtlSeconds) === 'credentials';
+  }
+
+  private isPollSuppressed(providerType: ClaudeProvider): boolean {
+    return this.pollBackoff.isActive(providerType, config.cacheTtlSeconds);
   }
 
   async refreshProjectCosts(): Promise<void> {

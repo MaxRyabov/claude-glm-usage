@@ -104,7 +104,7 @@
   "Rate limit reached. Wait for reset.": "已达速率限制，请等待重置。",
   "msgs": "条",
   "🤖 API key rejected": "🤖 API 密钥被拒绝",
-  "The provider rejected your API key.\\nCheck ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "服务商拒绝了你的 API 密钥。\\n请检查 ~/.claude/settings.json 中的 ANTHROPIC_AUTH_TOKEN",
-  "credits used of": "积分已用，共",
-  "left": "剩余"
+  "The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json": "服务商拒绝了你的 API 密钥。\n请检查 ~/.claude/settings.json 中的 ANTHROPIC_AUTH_TOKEN（或 ANTHROPIC_API_KEY）",
+  "{0} of {1} credits used": "已用 {0}／共 {1} 积分",
+  "{0} of {1} credits used — {2} left": "已用 {0}／共 {1} 积分 — 剩余 {2}"
 }

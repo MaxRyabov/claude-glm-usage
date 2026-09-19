@@ -376,6 +376,39 @@ suite('z.ai quota — window identification', () => {
     assert.ok(Math.abs(r.utilization7d - 0.20) < 1e-9);
   });
 
+  test('a unit-named window is never handed out twice by the positional pass', () => {
+    // Half-migrated payload: the 5-hour entry is named by unit but its reset sits beyond the
+    // six-hour horizon (clock skew, or a longer `number`), so the positional pass would have
+    // picked the unlabelled entry for the same slot — leaving both marked 5-hour and dropping
+    // the weekly window without a trace.
+    const r = parseZaiQuota(legacy([
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 40, nextResetTime: NOW + 8 * H },
+      { type: 'TOKENS_LIMIT', percentage: 88, nextResetTime: NOW + 2 * H },
+    ]), NOW);
+    assert.strictEqual(r.has7dLimit, true, 'the weekly window must survive');
+    assert.ok(Math.abs(r.utilization5h - 0.40) < 1e-9, `5h: ${r.utilization5h}`);
+    assert.ok(Math.abs(r.utilization7d - 0.88) < 1e-9, `7d: ${r.utilization7d}`);
+  });
+
+  test('the mirror case collapses neither slot', () => {
+    // Weekly named by unit and listed first, with an unlabelled entry resetting sooner.
+    const r = parseZaiQuota(legacy([
+      { type: 'TOKENS_LIMIT', unit: 6, number: 1, percentage: 70, nextResetTime: NOW + H },
+      { type: 'TOKENS_LIMIT', percentage: 20, nextResetTime: NOW + 2 * H },
+    ]), NOW);
+    assert.ok(Math.abs(r.utilization7d - 0.70) < 1e-9, `7d: ${r.utilization7d}`);
+    assert.ok(Math.abs(r.utilization5h - 0.20) < 1e-9, `5h: ${r.utilization5h}`);
+  });
+
+  test('two entries claiming the same unit do not both take the slot', () => {
+    const r = parseZaiQuota(legacy([
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 10, nextResetTime: NOW + H },
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 20, nextResetTime: NOW + H },
+    ]), NOW);
+    assert.ok(Math.abs(r.utilization5h - 0.10) < 1e-9);
+    assert.strictEqual(r.has7dLimit, false, 'a duplicate 5h entry is not a weekly window');
+  });
+
   test('unit wins per entry while order fills the gap', () => {
     // Proves there is no global format-version switch.
     const r = parseZaiQuota(legacy([

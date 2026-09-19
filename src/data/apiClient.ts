@@ -348,59 +348,68 @@ function zaiKindFromUnit(entry: ZaiLimitEntry): ZaiWindowKind | null {
 }
 
 /**
- * Legacy payloads name the period nowhere and both token caps share one `type`.
+ * Per-entry kind, aligned index-for-index with `limits`.
  *
- * Position is the signal that holds there: the array arrives in the order z.ai's own
- * dashboard renders it — 5-hour, then weekly, then MCP. `nextResetTime` cannot carry this
- * on its own, because an idle 5-hour window comes back with no reset time at all while an
- * exhausted weekly cap can be minutes from resetting. So order decides, and the reset time
- * only rejects a candidate that could not possibly be a 5-hour window.
+ * Legacy payloads name the period nowhere and both token caps share one `type`. Position is
+ * the signal that holds there: the array arrives in the order z.ai's own dashboard renders it
+ * — 5-hour, then weekly, then MCP. `nextResetTime` cannot carry this on its own, because an
+ * idle 5-hour window comes back with no reset time at all while an exhausted weekly cap can be
+ * minutes from resetting. So order decides, and the reset time only rejects a candidate that
+ * could not possibly be a 5-hour window.
  *
- * Only window caps compete for slots, so a payload leading with `TIME_LIMIT` — which the
- * live token tariff does — classifies the same as one without it. The returned map is keyed
- * by index into the FULL array so it zips back onto it entry for entry.
+ * Each slot is filled at most once, and `unit` always claims first. Letting the positional
+ * pass hand out a slot that `unit` had already named would collapse both windows into one on
+ * a half-migrated payload — a 5-hour entry whose reset sits beyond the horizon (clock skew, or
+ * a longer `number`) next to an unlabelled weekly entry ended up with both marked 5-hour, and
+ * the weekly window disappeared without a trace.
+ *
+ * Only window caps compete for slots, so a payload leading with `TIME_LIMIT` — which the live
+ * token tariff does — classifies the same as one without it.
  */
-function zaiKindsFromOrder(limits: ZaiLimitEntry[], now: number): Map<number, ZaiWindowKind> {
-  const capIndexes: number[] = [];
-  limits.forEach((entry, index) => { if (isZaiWindowCap(entry)) { capIndexes.push(index); } });
+function zaiResolveKinds(limits: ZaiLimitEntry[], now: number): ZaiWindowKind[] {
+  const kinds: (ZaiWindowKind | null)[] = limits.map(zaiKindFromUnit);
 
-  const couldBeShortWindow = (index: number): boolean => {
-    const reset = limits[index].nextResetTime;
-    if (!isFiniteNumber(reset)) { return true; } // no reset time at all — an idle 5-hour window
-    return reset - now <= ZAI_SHORT_WINDOW_HORIZON_MS;
-  };
+  let fiveTaken = false;
+  let weekTaken = false;
+  kinds.forEach((kind, index) => {
+    if (kind === '5h') {
+      if (fiveTaken) { kinds[index] = 'other'; } else { fiveTaken = true; }
+    } else if (kind === 'week') {
+      if (weekTaken) { kinds[index] = 'other'; } else { weekTaken = true; }
+    }
+  });
 
-  // The first cap not provably too far out takes the 5-hour slot; when every candidate looks
-  // too far out, trust the ordering rather than inventing a swap.
-  const shortIndex = capIndexes.find(couldBeShortWindow) ?? capIndexes[0];
+  // Window caps whose period is unresolved take whatever slots are left, in array order.
+  const pending: number[] = [];
+  kinds.forEach((kind, index) => {
+    if (kind === null && isZaiWindowCap(limits[index])) { pending.push(index); }
+  });
 
-  const kinds = new Map<number, ZaiWindowKind>();
-  let weeklyTaken = false;
-  for (const index of capIndexes) {
-    if (index === shortIndex) {
-      kinds.set(index, '5h');
-    } else if (!weeklyTaken) {
-      kinds.set(index, 'week');
-      weeklyTaken = true;
+  if (pending.length > 0 && !fiveTaken) {
+    const couldBeShortWindow = (index: number): boolean => {
+      const reset = limits[index].nextResetTime;
+      if (!isFiniteNumber(reset)) { return true; } // no reset time at all — an idle window
+      return reset - now <= ZAI_SHORT_WINDOW_HORIZON_MS;
+    };
+    // The first candidate not provably too far out takes the 5-hour slot; when every one looks
+    // too far out, trust the ordering rather than inventing a swap.
+    kinds[pending.find(couldBeShortWindow) ?? pending[0]] = '5h';
+    fiveTaken = true;
+  }
+
+  for (const index of pending) {
+    if (kinds[index] !== null) { continue; }
+    if (!weekTaken) {
+      kinds[index] = 'week';
+      weekTaken = true;
     } else {
       // Only two windows exist; a third cap is ignored rather than replacing the weekly one.
-      kinds.set(index, 'other');
+      kinds[index] = 'other';
     }
   }
-  return kinds;
-}
 
-/** Per-entry kind, aligned index-for-index with `limits`. */
-function zaiResolveKinds(limits: ZaiLimitEntry[], now: number): ZaiWindowKind[] {
-  // Build the positional map only when some cap's period is unresolvable; `unit` still wins
-  // per entry wherever it resolves, so a half-migrated payload is read correctly.
-  const needsOrder = limits.some(e => isZaiWindowCap(e) && zaiKindFromUnit(e) === null);
-  const byOrder = needsOrder ? zaiKindsFromOrder(limits, now) : new Map<number, ZaiWindowKind>();
-
-  return limits.map((entry, index): ZaiWindowKind =>
-    zaiKindFromUnit(entry)
-      ?? byOrder.get(index)
-      ?? (entry.type === ZAI_TIME_LIMIT ? 'mcp' : 'other'));
+  return kinds.map((kind, index) =>
+    kind ?? (limits[index].type === ZAI_TIME_LIMIT ? 'mcp' : 'other'));
 }
 
 /** Window length in seconds: `unit` x `number` when stated, else the known default. */
@@ -543,6 +552,18 @@ export function readZaiEnvelopeFailure(json: unknown): { code: number | null, st
 /** Marks "your key was refused" so the caller can back off instead of retrying every tick. */
 export class ZaiAuthError extends Error {}
 
+/**
+ * Marks a failure that repeating cannot fix: the payload shape moved, or the endpoint answered
+ * something we do not recognise.
+ *
+ * This needs its own class for the same reason `ZaiAuthError` does. Before this change a shape
+ * we could not read still produced a cacheable zero, so nothing polled in a loop; now it throws,
+ * and a thrown failure writes no cache, which the scheduler reads as "no data yet, call again"
+ * on every tick. A network blip is worth retrying in sixty seconds — a payload that no longer
+ * parses is not.
+ */
+export class ZaiFormatError extends Error {}
+
 export async function fetchZaiQuota(
   baseUrl: string,
   token: string,
@@ -572,7 +593,7 @@ export async function fetchZaiQuota(
       try {
         body = await response.json();
       } catch {
-        throw new Error('z.ai quota response was not JSON');
+        throw new ZaiFormatError('z.ai quota response was not JSON');
       }
 
       const failure = readZaiEnvelopeFailure(body);
@@ -580,7 +601,7 @@ export async function fetchZaiQuota(
         // A 200 with no usable window cap means the payload shape moved again. Throwing lets
         // the caller keep showing cached quota instead of a fabricated 0%.
         if (!zaiLimitsOf(body).some(isZaiWindowCap)) {
-          throw new Error('z.ai quota response contained no usable limits');
+          throw new ZaiFormatError('z.ai quota response contained no usable limits');
         }
         return parseZaiQuota(body);
       }

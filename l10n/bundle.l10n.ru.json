@@ -104,7 +104,7 @@
   "Rate limit reached. Wait for reset.": "Лимит достигнут. Дождитесь сброса.",
   "msgs": "сообщ.",
   "🤖 API key rejected": "🤖 Ключ API отвергнут",
-  "The provider rejected your API key.\\nCheck ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "Провайдер отверг ваш ключ API.\\nПроверьте ANTHROPIC_AUTH_TOKEN в ~/.claude/settings.json",
-  "credits used of": "кредитов из",
-  "left": "осталось"
+  "The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json": "Провайдер отверг ваш ключ API.\nПроверьте ANTHROPIC_AUTH_TOKEN (или ANTHROPIC_API_KEY) в ~/.claude/settings.json",
+  "{0} of {1} credits used": "Использовано {0} из {1} кредитов",
+  "{0} of {1} credits used — {2} left": "Использовано {0} из {1} кредитов — осталось {2}"
 }

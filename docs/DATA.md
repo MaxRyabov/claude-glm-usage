@@ -280,7 +280,12 @@ monitor endpoint:
 
 ```
 GET {origin}/api/monitor/usage/quota/limit
-Authorization: Bearer <ANTHROPIC_AUTH_TOKEN>   (falls back to the raw token)
+Authorization: Bearer <token>       then, if auth is refused, the bare <token>
+
+token = ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY when the first is unset — resolved from
+process.env, then ~/.claude/settings.json, then ~/.claude/settings.local.json. The second
+attempt sends the same token without the "Bearer " prefix: coding-plan endpoints expect it
+bare. Only an authentication-class failure triggers the second attempt.
 ```
 
 **Two payload generations are live at once**, and which one a user sees depends on their
@@ -316,6 +321,13 @@ tariff, not on anything we can request:
 >   dead key as a healthy idle account.
 > - `msg` is returned in English or Chinese at random, ignoring `Accept-Language` — never
 >   show it to the user; map the code instead.
+>
+> **Unit boundary:** z.ai reports `nextResetTime` in epoch **milliseconds**, while
+> `RateLimitData.resetIn5h`/`resetIn7d` are **relative seconds** and the cache stores
+> `reset5hAt`/`reset7dAt` as **absolute Unix seconds**. The conversion happens once, in
+> `zaiResetSeconds` (`reset / 1000 - nowSec`); everything downstream is already in seconds.
+> Getting this wrong is silent — a reset time out by a factor of 1000 is still a truthy
+> number and passes every range check.
 
 #### How the two windows are told apart
 
@@ -368,6 +380,9 @@ interface CacheFile {
     has7dLimit?: boolean      // v4: stored explicitly, see the history note below
     billing?: 'credits' | 'tokens'   // v4: z.ai only
     planLevel?: string               // v4: z.ai only, length-bounded
+    // `remaining` is stored exactly as the API sent it and is NEVER recomputed from
+    // total − used: upstream rounds it, because credits are fractional (see the z.ai section
+    // above). It is optional because the API does not always send it.
     credits5h?: { used: number, total: number, remaining?: number }  // v4: z.ai only
     credits7d?: { used: number, total: number, remaining?: number }  // v4: z.ai only
   }
