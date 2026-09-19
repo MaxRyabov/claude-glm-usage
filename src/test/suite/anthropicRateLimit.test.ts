@@ -11,7 +11,10 @@ import { AuthBackoff } from '../../data/authBackoff';
  * that must NOT move.
  */
 suite('Anthropic rate-limit headers', () => {
-  const NOW_SEC = Math.floor(Date.now() / 1000);
+  // Read per test, not at module load: fetchRateLimitData takes its own Date.now() reading
+  // internally, so a timestamp captured when the file was loaded drifts by however long the
+  // suite takes to reach the assertion — about two seconds here, which is enough to fail.
+  const nowSec = () => Math.floor(Date.now() / 1000);
   let credDir: string;
   let credPath: string;
 
@@ -39,8 +42,8 @@ suite('Anthropic rate-limit headers', () => {
     const r = await fetchRateLimitData(credPath, reply({
       'anthropic-ratelimit-unified-5h-utilization': '0.42',
       'anthropic-ratelimit-unified-7d-utilization': '0.17',
-      'anthropic-ratelimit-unified-5h-reset': String(NOW_SEC + 1800),
-      'anthropic-ratelimit-unified-7d-reset': String(NOW_SEC + 172800),
+      'anthropic-ratelimit-unified-5h-reset': String(nowSec() + 1800),
+      'anthropic-ratelimit-unified-7d-reset': String(nowSec() + 172800),
       'anthropic-ratelimit-unified-5h-status': 'allowed',
     }));
     assert.ok(Math.abs(r.utilization5h - 0.42) < 1e-9);
@@ -54,7 +57,7 @@ suite('Anthropic rate-limit headers', () => {
   test('a denied status header wins over utilization', async () => {
     const r = await fetchRateLimitData(credPath, reply({
       'anthropic-ratelimit-unified-5h-utilization': '0.10',
-      'anthropic-ratelimit-unified-5h-reset': String(NOW_SEC + 60),
+      'anthropic-ratelimit-unified-5h-reset': String(nowSec() + 60),
       'anthropic-ratelimit-unified-5h-status': 'denied',
     }));
     assert.strictEqual(r.limitStatus, 'denied');
@@ -64,7 +67,7 @@ suite('Anthropic rate-limit headers', () => {
     // Pro plans send no 7d headers at all; Max plans do.
     const r = await fetchRateLimitData(credPath, reply({
       'anthropic-ratelimit-unified-5h-utilization': '0.80',
-      'anthropic-ratelimit-unified-5h-reset': String(NOW_SEC + 900),
+      'anthropic-ratelimit-unified-5h-reset': String(nowSec() + 900),
       'anthropic-ratelimit-unified-5h-status': 'allowed',
     }));
     assert.strictEqual(r.has7dLimit, false);
@@ -88,7 +91,7 @@ suite('Anthropic rate-limit headers', () => {
   test('the z.ai-only fields stay absent for Anthropic', async () => {
     const r = await fetchRateLimitData(credPath, reply({
       'anthropic-ratelimit-unified-5h-utilization': '0.5',
-      'anthropic-ratelimit-unified-5h-reset': String(NOW_SEC + 600),
+      'anthropic-ratelimit-unified-5h-reset': String(nowSec() + 600),
       'anthropic-ratelimit-unified-5h-status': 'allowed',
     }));
     assert.strictEqual(r.billing, undefined);
