@@ -27,3 +27,36 @@ suite('WebView CSP / Chart.js bundling', () => {
     );
   });
 });
+
+suite('WebView credit amounts and plan tier', () => {
+  test('the amounts blocks start hidden, so a provider without them shows nothing', () => {
+    // Every provider but z.ai, and every token-based z.ai tariff, reports no amounts at all.
+    // Rendering is driven purely by presence, so the default state has to be hidden.
+    assert.ok(
+      /id="usage-5h-amounts"[^>]*style="display:none"/.test(html),
+      '5h amounts block must default to hidden',
+    );
+    assert.ok(
+      /id="usage-7d-amounts"[^>]*style="display:none"/.test(html),
+      '7d amounts block must default to hidden',
+    );
+  });
+
+  test('the plan tier badge starts hidden', () => {
+    assert.ok(
+      /id="plan-badge"[^>]*style="display:none"/.test(html),
+      'plan badge must default to hidden',
+    );
+  });
+
+  test('the plan tier is written as text, never as markup', () => {
+    // planLevel is a free-form string from an external API that also lands in the on-disk
+    // cache, so it must never reach innerHTML.
+    assert.ok(html.includes('badge.textContent = level'), 'plan tier must be set via textContent');
+    assert.ok(!/badge\.innerHTML/.test(html), 'plan tier must never be assigned to innerHTML');
+  });
+
+  test('amounts are written as text too', () => {
+    assert.ok(/el\.textContent = parts\.join/.test(html), 'amounts must be set via textContent');
+  });
+});

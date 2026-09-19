@@ -22,6 +22,7 @@ import { computePrediction, PredictionData } from './prediction';
 import { getHeatmapData as computeHeatmapData, HeatmapData } from '../webview/heatmap';
 import { loadPersistedCache, persistCache } from './entryCache';
 import { readSnapshot, writeSnapshot } from './snapshotCache';
+import { AuthBackoff } from './authBackoff';
 import { config } from '../config';
 
 export { PredictionData, HeatmapData };
@@ -68,20 +69,13 @@ export class DataManager {
   private static instance: DataManager;
 
   /**
-   * When the provider last refused our credentials, and for which provider.
-   *
-   * Without this the QF-4 fix would make things worse, not better: a rejected key now throws
-   * instead of returning a cheerful 0%, so nothing is written to the cache, and
-   * `shouldCallApi` treats a missing cache as a reason to call — on every 60-second tick,
-   * two HTTP requests at a time. The project's rule is at most one call per five minutes
-   * when idle.
+   * Suppresses polling after the provider refuses our credentials — see `AuthBackoff`.
    *
    * Held in memory rather than on disk: a window reload re-arms it, which is acceptable
    * because the case this protects against is a window sitting idle for hours. An explicit
    * user-driven refresh deliberately bypasses it.
    */
-  private authRejectedAt: number | null = null;
-  private authRejectedProvider: ClaudeProvider | null = null;
+  private readonly authBackoff = new AuthBackoff<ClaudeProvider>();
   private readonly _onDidUpdate = new vscode.EventEmitter<ClaudeUsageData>();
   readonly onDidUpdate: vscode.Event<ClaudeUsageData> = this._onDidUpdate.event;
 
@@ -184,13 +178,13 @@ export class DataManager {
                 ? await this.fetchZaiRateLimit()
                 : await fetchRateLimitData(config.credentialsPath);
               await writeCache(rateLimitData, providerType);
-              this.clearAuthRejection();
+              this.authBackoff.clear();
               dataSource = 'api';
             }
           } catch (err) {
             // missing token/credentials or network error — fall back to cache, else cost-only
             const rejected = err instanceof ZaiAuthError;
-            if (rejected) { this.recordAuthRejection(providerType); }
+            if (rejected) { this.authBackoff.record(providerType); }
             if (cache) {
               rateLimitData = this.cacheToRateLimitData(cache.usageData);
               dataSource = rejected
@@ -301,23 +295,7 @@ export class DataManager {
   }
 
   private isAuthRejectionActive(providerType: ClaudeProvider): boolean {
-    if (this.authRejectedAt === null || this.authRejectedProvider !== providerType) { return false; }
-    const elapsed = (Date.now() - this.authRejectedAt) / 1000;
-    if (elapsed >= config.cacheTtlSeconds) {
-      this.clearAuthRejection();
-      return false;
-    }
-    return true;
-  }
-
-  private recordAuthRejection(providerType: ClaudeProvider): void {
-    this.authRejectedAt = Date.now();
-    this.authRejectedProvider = providerType;
-  }
-
-  private clearAuthRejection(): void {
-    this.authRejectedAt = null;
-    this.authRejectedProvider = null;
+    return this.authBackoff.isActive(providerType, config.cacheTtlSeconds);
   }
 
   async refreshProjectCosts(): Promise<void> {

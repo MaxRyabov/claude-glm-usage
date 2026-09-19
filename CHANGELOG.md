@@ -9,6 +9,45 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **z.ai credit tariffs showed 0 % on every quota window.** Newer z.ai plans report their quota
+  as `CREDIT_LIMIT` entries, which the parser filtered out by type, so the status bar, the
+  dashboard gauges and the rate-limit notifications were all silently wrong for those accounts.
+  Both payload generations are now read, classified per entry rather than by a single detected
+  format version.
+- **Weekly quota was invisible on older z.ai payloads.** Responses that state no period yielded a
+  window length of 0, so the weekly cap was never identified. Those users will now see a weekly
+  row and start receiving weekly notifications that never appeared before.
+- **A rejected z.ai API key was reported as "0 % used".** z.ai answers a refused token with
+  HTTP 200 and a failure envelope, not 401, so an expired key was parsed as a healthy idle
+  account and cached as fresh. The envelope is now inspected, the status bar says the key was
+  rejected, and polling backs off instead of retrying every minute. As a side effect the
+  bearer-to-raw-token fallback works for the first time — it was gated on an HTTP status the
+  live API never returns.
+- **Anthropic Pro plans showed a phantom weekly row.** Whether a weekly window exists was derived
+  from a cached reset timestamp that is always non-zero, so any cache read claimed one existed —
+  for every provider. It is now stored explicitly.
+- **An exhausted z.ai window showed amber, not red.** The limit status could never reach
+  "denied" for z.ai, so a spent quota looked the same as one at 76 %.
+- The period unit map read weeks as days, making the weekly fallback reset horizon seven times
+  too short.
+
+### Added
+
+- **Absolute credit amounts in the dashboard.** Credit-based z.ai tariffs now show used, total
+  and remaining credits beside each quota bar, plus a plan tier badge. Token-based tariffs and
+  every other provider are unchanged — the display is driven by whether the data exists.
+- Quota percentages are derived from the absolute amounts where they are available, so the
+  notification thresholds are no longer quantised by an integer percentage from upstream.
+
+### Changed
+
+- Cache schema is now version 4 (explicit weekly-window flag, credit fields). Version 3 is still
+  read, so an updated window and one still running the previous build cannot invalidate each
+  other's cache writes. The dashboard snapshot schema is deliberately unchanged, so the instant
+  cold-start render is preserved.
+
 ---
 
 ## [1.1.0] — 2026-07-09

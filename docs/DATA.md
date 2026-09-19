@@ -273,6 +273,77 @@ Non-`claude-ai` providers always use cost mode (no rate limit percentages).
 
 ---
 
+### z.ai Quota (`parseZaiQuota` / `fetchZaiQuota`)
+
+For the `z-ai` provider the 5-hour and weekly quota comes from an undocumented but stable
+monitor endpoint:
+
+```
+GET {origin}/api/monitor/usage/quota/limit
+Authorization: Bearer <ANTHROPIC_AUTH_TOKEN>   (falls back to the raw token)
+```
+
+**Two payload generations are live at once**, and which one a user sees depends on their
+tariff, not on anything we can request:
+
+```jsonc
+// Credit tariff (newer plans) — absolute credit amounts, no MCP entry
+{"code":200,"success":true,"data":{"level":"max","limits":[
+ {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":28000,"currentValue":16693,
+  "remaining":11306,"percentage":59,"nextResetTime":1789728421115},
+ {"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":140000,"currentValue":47691,
+  "remaining":92308,"percentage":34,"nextResetTime":1790062251984}]}}
+
+// Token tariff (older plans) — percentages only, plus a monthly MCP allowance
+{"code":200,"success":true,"data":{"level":"max","limits":[
+ {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":0},   // idle: no nextResetTime
+ {"type":"TOKENS_LIMIT","unit":6,"number":1,"percentage":100,"nextResetTime":1790075035980},
+ {"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":20,"remaining":3980,
+  "percentage":1,"nextResetTime":1790593435997,"usageDetails":[…]}]}}
+```
+
+> **Verified facts (captured from two live accounts, 2026-09-18):**
+> - `usage` is **the cap**; `currentValue` is the **amount used**. The naming is inverted
+>   relative to every other API here, and getting it backwards is the easiest bug to write.
+> - `remaining` is **rounded** and is not `usage - currentValue`: 28000 − 16693 = 11307
+>   arrives as 11306, because credits are fractional. Never recompute it.
+> - `nextResetTime` is epoch **milliseconds**, and is **omitted entirely** for an idle
+>   5-hour window — that window is anchored to the first request inside it.
+> - `unit` codes: `3` = hours, `5` = months, `6` = weeks. `1`, `2` and `4` have never been
+>   observed and are treated as unresolved rather than guessed.
+> - A **rejected token returns HTTP 200**, not 401, with `{"success": false}` and a business
+>   `code` (401, 1000 and 1001 all mean "auth refused"). Checking `response.ok` alone reads a
+>   dead key as a healthy idle account.
+> - `msg` is returned in English or Chinese at random, ignoring `Accept-Language` — never
+>   show it to the user; map the code instead.
+
+#### How the two windows are told apart
+
+Classification is **per entry, with no global format-version switch**, so a half-migrated
+payload degrades entry by entry rather than being routed wholly to the wrong parser:
+
+1. `(type, unit)` decides where it resolves. Only `TOKENS_LIMIT` and `CREDIT_LIMIT` compete
+   for the two window slots; `TIME_LIMIT` (the monthly MCP allowance) never does.
+2. Where it does not resolve — payloads predating `unit` name the period nowhere, and both
+   token caps share one `type` — **array position decides**: the array arrives in the order
+   z.ai's own dashboard renders it (5-hour, weekly, MCP).
+3. **Reset time only vetoes.** Anything more than six hours out is provably not a 5-hour
+   window (five hours, plus an hour of slack for clock skew). It can never select one
+   positively: an exhausted weekly cap was observed resetting **40 minutes before** the
+   5-hour window on the same account, and an idle 5-hour window carries no reset time at all.
+
+Utilization prefers `currentValue / usage` over `percentage`, which is an integer — the live
+credit account reported 59 for an actual 59.62 %, and the notification ladder steps at
+90/92/94/96/98. The ratio is used only when it agrees with `percentage` within 1.5 pp, which
+guards against z.ai one day fixing its inverted naming; when `percentage` is absent there is
+nothing to disagree with and the ratio is used directly.
+
+A window with no usable reset time reports a **full window** (5 h or 7 d), never zero: the
+dashboard hides its prediction chart at zero, and the prediction engine turns zero into a
+"under 10 minutes left" warning for a user at 3 % utilization.
+
+---
+
 ## 3. Cache (`src/data/cache.ts`)
 
 ### Cache File Location
@@ -281,18 +352,24 @@ Non-`claude-ai` providers always use cost mode (no rate limit percentages).
 ~/.claude/vscode-claude-status-cache.json
 ```
 
-### Cache Schema (Version 2)
+### Cache Schema (Version 4)
 
 ```typescript
 interface CacheFile {
-  version: 2
+  version: 3 | 4              // v3 is still accepted for reading; writes are always v4
   updatedAt: string           // ISO datetime
+  providerType: string        // which provider produced this snapshot
   usageData: {
     utilization5h: number
     utilization7d: number
     reset5hAt: number         // absolute Unix timestamp (seconds) — NOT relative seconds
     reset7dAt: number         // 0 if no 7d limit (non-Max plan)
     limitStatus: string
+    has7dLimit?: boolean      // v4: stored explicitly, see the history note below
+    billing?: 'credits' | 'tokens'   // v4: z.ai only
+    planLevel?: string               // v4: z.ai only, length-bounded
+    credits5h?: { used: number, total: number, remaining?: number }  // v4: z.ai only
+    credits7d?: { used: number, total: number, remaining?: number }  // v4: z.ai only
   }
 }
 ```
@@ -300,6 +377,22 @@ interface CacheFile {
 > **Schema version history:**
 > - v1: stored `resetIn5h`/`resetIn7d` as relative seconds from cache write time
 > - v2: stores `reset5hAt`/`reset7dAt` as absolute Unix timestamps (correct across cache reads)
+> - v3: adds `providerType`, so a claude-ai cache is never served as z.ai data
+> - v4: adds `has7dLimit` and the z.ai credit fields
+>
+> **Why `has7dLimit` had to become explicit:** it used to be derived as `reset7dAt > 0`, but
+> `writeCache` stores `now + resetIn7d` — roughly 1.8 × 10⁹ even when `resetIn7d` is 0. Every
+> cached read therefore claimed a weekly window existed, for **every** provider, so Anthropic
+> Pro users saw a phantom weekly row as soon as the first cache read happened.
+>
+> **Why v3 is still read:** during an extension update two windows share one cache file. If the
+> new reader rejected v3, it would rewrite v4, the old reader would reject that and rewrite v3,
+> and both would poll the API on every tick until every window restarted. Accepting v3 for
+> reading (and always writing v4) breaks that loop.
+>
+> The dashboard **snapshot** schema is deliberately left at version 1: the new fields are
+> optional and its validator accepts them, whereas bumping it would reject every existing
+> snapshot and cost each user the instant cold-start render.
 
 Cost and token data are NOT cached (always read from JSONL directly — it's local
 and fast). Only the API response values are cached.
