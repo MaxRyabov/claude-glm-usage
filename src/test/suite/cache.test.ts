@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { isCacheValid, getCacheAge, validateCacheFile, writeCache } from '../../data/cache';
+import { isCacheValid, getCacheAge, validateCacheFile, writeCache, getCachePath } from '../../data/cache';
 
 // Minimal CacheFile shape for testing (without importing private type).
 // Deliberately still v3: the current reader accepts both 3 and 4, so this fixture doubles as
@@ -226,8 +226,12 @@ suite('Cache schema v4', () => {
     // The defect this replaces: has7dLimit was derived from `reset7dAt > 0`, and writeCache
     // stores `now + resetIn7d` — ~1.8e9 even when resetIn7d is 0 — so every cached read
     // claimed a weekly window, for every provider including Anthropic Pro.
-    const cachePath = path.join(os.homedir(), '.claude', 'vscode-claude-status-cache.json');
-    const saved = fs.existsSync(cachePath) ? fs.readFileSync(cachePath, 'utf-8') : null;
+    const cachePath = getCachePath();
+    // Read defensively rather than exists-then-read: the live extension writes this same file
+    // on its own timer, so the file can vanish between the two calls and throw before the
+    // try/finally that is supposed to restore it.
+    let saved: string | null = null;
+    try { saved = fs.readFileSync(cachePath, 'utf-8'); } catch { /* no cache to preserve */ }
     try {
       await writeCache({
         utilization5h: 0.2, utilization7d: 0, resetIn5h: 900, resetIn7d: 0,

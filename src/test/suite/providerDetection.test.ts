@@ -314,8 +314,8 @@ suite('z.ai quota — window identification', () => {
     ]), NOW);
     assert.ok(Math.abs(r.utilization5h - 0.64) < 1e-9);
     assert.strictEqual(r.utilization7d, 1);
-    // Today this reads has7dLimit === false, because `number` is absent so the window length
-    // computes to 0 and the weekly cap is never found.
+    // Before this change an absent `number` made the window length compute to 0, so the
+    // weekly cap was never found and this read false. The assertion pins the fixed behaviour.
     assert.strictEqual(r.has7dLimit, true);
   });
 

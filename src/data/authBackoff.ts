@@ -38,14 +38,19 @@ export class PollBackoff<P> {
 
   /**
    * The reason polling is currently suppressed for this provider, or null when it is not.
-   * Expiry is self-clearing, so a recovered key resumes polling on the next tick.
+   *
+   * A pure query: an expired record is reported as inactive but not discarded. Clearing from
+   * inside a read looked tidy, but it made the answer depend on who asked first — a caller
+   * passing a shorter ttl, or a diagnostic `isActive(provider, 0)`, would silently destroy a
+   * live suppression and bring back the request storm this module exists to prevent. The
+   * record is dropped on a successful poll, which is the event that actually ends it.
    */
   activeReason(provider: P, ttlSeconds: number, now: number = Date.now()): PollBackoffReason | null {
     if (this.startedAt === null || this.provider !== provider) { return null; }
-    if ((now - this.startedAt) / 1000 >= ttlSeconds) {
-      this.clear();
-      return null;
-    }
+    const elapsed = (now - this.startedAt) / 1000;
+    // A backwards step in the wall clock (NTP correction, VM snapshot restore) makes `elapsed`
+    // negative, which would otherwise hold the suppression until real time caught up again.
+    if (elapsed < 0 || elapsed >= ttlSeconds) { return null; }
     return this.reason;
   }
 

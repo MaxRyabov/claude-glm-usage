@@ -38,7 +38,12 @@ interface CacheFile {
   }
 }
 
-function getCachePath(): string {
+/**
+ * Exported so tests back up and restore the same file the module writes. Two copies of this
+ * path would drift apart silently: the tests would save and restore a path that no longer
+ * exists while `writeCache` scribbled fixture quotas into the user's real cache.
+ */
+export function getCachePath(): string {
   return path.join(os.homedir(), '.claude', 'vscode-claude-status-cache.json');
 }
 
@@ -121,7 +126,14 @@ export async function writeCache(data: RateLimitData, providerType: string): Pro
   // The dashboard is served from cache for most of the TTL, so the amounts have to survive
   // the round-trip or they would flicker between polls.
   if (data.billing !== undefined) { usageData.billing = data.billing; }
-  if (data.planLevel !== undefined) { usageData.planLevel = data.planLevel; }
+  // Apply the same bound the validator enforces. Writing a value our own reader would reject
+  // would mean rewriting a file that readCache then discards on every tick — the extension
+  // would fall back to calling the API each time, which is the degradation this schema is
+  // meant to avoid.
+  if (typeof data.planLevel === 'string' &&
+      data.planLevel.length > 0 && data.planLevel.length <= MAX_LEVEL_LENGTH) {
+    usageData.planLevel = data.planLevel;
+  }
   if (data.credits5h !== undefined) { usageData.credits5h = data.credits5h; }
   if (data.credits7d !== undefined) { usageData.credits7d = data.credits7d; }
 

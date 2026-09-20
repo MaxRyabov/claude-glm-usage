@@ -1263,10 +1263,12 @@ export function getWebviewContent(
       const hasRemaining = typeof amounts.remaining === 'number';
       const tmpl = hasRemaining ? i18n.creditsUsageLeft : i18n.creditsUsage;
       el.style.display = '';
+      // Global replace: a translation is free to use a placeholder twice, and a string
+      // replace would silently fill only the first one.
       el.textContent = tmpl
-        .replace('__N__', num(amounts.used))
-        .replace('__N2__', num(amounts.total))
-        .replace('__N3__', hasRemaining ? num(amounts.remaining) : '');
+        .replace(/__N__/g, num(amounts.used))
+        .replace(/__N2__/g, num(amounts.total))
+        .replace(/__N3__/g, hasRemaining ? num(amounts.remaining) : '');
     }
 
     function num(v) {

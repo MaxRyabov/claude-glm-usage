@@ -116,8 +116,8 @@ suite('Poll backoff', () => {
     const b = new PollBackoff<string>();
     b.record('z-ai', 'credentials', T0);
     assert.strictEqual(b.isActive('z-ai', TTL, T0 + TTL * 1000), false);
-    // Self-clearing, so a recovered key resumes polling rather than staying suppressed.
-    assert.strictEqual(b.isActive('z-ai', TTL, T0 + 1), false);
+    // And stays expired: a recovered key resumes polling rather than staying suppressed.
+    assert.strictEqual(b.isActive('z-ai', TTL, T0 + TTL * 2000), false);
   });
 
   test('suppression is per provider', () => {
@@ -140,6 +140,24 @@ suite('Poll backoff', () => {
     b.record('z-ai', 'format', T0);
     assert.strictEqual(b.isActive('z-ai', TTL, T0 + 60_000), true);
     assert.strictEqual(b.activeReason('z-ai', TTL, T0 + 60_000), 'format');
+  });
+
+  test('reading an expired record does not destroy a live one', () => {
+    // activeReason is a query, not a command. Clearing from inside the read made the answer
+    // depend on who asked first: a caller passing a shorter ttl would wipe a suppression that
+    // is still live for everyone else, bringing back the request storm.
+    const b = new PollBackoff<string>();
+    b.record('z-ai', 'credentials', T0);
+    assert.strictEqual(b.isActive('z-ai', 0, T0 + 1), false, 'a zero ttl reads as expired');
+    assert.strictEqual(b.activeReason('z-ai', TTL, T0 + 1000), 'credentials',
+      'the record must survive being read with a shorter ttl');
+  });
+
+  test('a backwards clock step does not extend the suppression', () => {
+    // NTP correction or a VM snapshot restore can put `now` before the recorded moment.
+    const b = new PollBackoff<string>();
+    b.record('z-ai', 'credentials', T0);
+    assert.strictEqual(b.isActive('z-ai', TTL, T0 - 60_000), false);
   });
 
   test('the reason distinguishes the two classes', () => {
