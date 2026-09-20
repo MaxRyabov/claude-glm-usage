@@ -18,6 +18,19 @@ suite('Anthropic rate-limit headers', () => {
   let credDir: string;
   let credPath: string;
 
+  // Sweep residue from runs that were killed between setup and teardown (CI timeout, crash).
+  // The path guard in fetchRateLimitData confines credentials to ~/.claude, so the fixtures
+  // cannot live in a temp sandbox — but they should not accumulate there either.
+  suiteSetup(async () => {
+    const claudeDir = path.join(os.homedir(), '.claude');
+    let entries: string[] = [];
+    try { entries = await fs.readdir(claudeDir); } catch { return; }
+    for (const name of entries.filter(e => e.startsWith('test-anthropic-'))) {
+      try { await fs.rm(path.join(claudeDir, name), { recursive: true, force: true }); }
+      catch { /* a directory we cannot remove is not worth failing the suite over */ }
+    }
+  });
+
   setup(async () => {
     // fetchRateLimitData reads credentials first, and the path guard confines it to ~/.claude.
     credDir = path.join(os.homedir(), '.claude', `test-anthropic-${process.pid}-${Date.now()}`);
@@ -94,6 +107,10 @@ suite('Anthropic rate-limit headers', () => {
       'anthropic-ratelimit-unified-5h-reset': String(nowSec() + 600),
       'anthropic-ratelimit-unified-5h-status': 'allowed',
     }));
+    // Assert the fixture actually reached the parser first: without this, a typo in a header
+    // name would leave every field undefined and the absence checks below would pass while
+    // proving nothing.
+    assert.strictEqual(r.utilization5h, 0.5, 'the fixture must have been parsed');
     assert.strictEqual(r.billing, undefined);
     assert.strictEqual(r.planLevel, undefined);
     assert.strictEqual(r.credits5h, undefined);

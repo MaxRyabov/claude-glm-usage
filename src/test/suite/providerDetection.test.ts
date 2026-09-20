@@ -566,10 +566,15 @@ suite('z.ai quota — envelope failures', () => {
 
   test('both forms refused throws a ZaiAuthError after two attempts', async () => {
     let calls = 0;
-    const fake = (async () => { calls++; return reply({ code: 1000, success: false }); }) as unknown as typeof fetch;
+    // The fixture carries the real upstream `msg`, otherwise the negative check below would be
+    // tautological: nothing could leak into the message because nothing was there to leak.
+    const fake = (async () => {
+      calls++;
+      return reply({ code: 1000, success: false, msg: 'Authentication Failed' });
+    }) as unknown as typeof fetch;
     await assert.rejects(
       () => fetchZaiQuota('https://api.z.ai/api/anthropic', 't', fake),
-      (e: Error) => e instanceof ZaiAuthError && !/msg|Authentication Failed/.test(e.message),
+      (e: Error) => e instanceof ZaiAuthError && !/Authentication Failed/.test(e.message),
     );
     assert.strictEqual(calls, 2);
   });
