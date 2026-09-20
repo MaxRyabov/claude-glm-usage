@@ -11,7 +11,20 @@ import { PollBackoff } from '../../data/authBackoff';
  * that must NOT move.
  */
 /** Exactly what `setup` below creates — see the note on the sweep in `suiteSetup`. */
-const FIXTURE_DIR = /^test-anthropic-\d+-\d+$/;
+const FIXTURE_DIR = /^test-anthropic-(\d+)-\d+$/;
+
+/** Whether the process that created a fixture directory is still running. */
+function ownerIsAlive(dirName: string): boolean {
+  const pid = Number(FIXTURE_DIR.exec(dirName)?.[1]);
+  if (!Number.isInteger(pid) || pid <= 0) { return true; } // unreadable owner — do not touch it
+  if (pid === process.pid) { return true; }
+  try {
+    process.kill(pid, 0); // signal 0 only probes; it does not terminate anything
+    return true;
+  } catch {
+    return false; // no such process, so the directory is genuinely residue
+  }
+}
 
 suite('Anthropic rate-limit headers', () => {
   // Read per test, not at module load: fetchRateLimitData takes its own Date.now() reading
@@ -35,6 +48,10 @@ suite('Anthropic rate-limit headers', () => {
     try { entries = await fs.readdir(claudeDir); } catch { return; }
     for (const name of entries.filter(e => FIXTURE_DIR.test(e))) {
       const dir = path.join(claudeDir, name);
+      // Residue means a run that is no longer running. A second copy of this suite on the same
+      // machine — two CI jobs on one runner, two working trees — has a live fixture of exactly
+      // this shape, and deleting it mid-run would make that run flake.
+      if (ownerIsAlive(name)) { continue; }
       try {
         const contents = await fs.readdir(dir);
         if (contents.length > 1 || (contents.length === 1 && contents[0] !== '.credentials.json')) {
@@ -105,14 +122,20 @@ suite('Anthropic rate-limit headers', () => {
   });
 
   test('malformed header values clamp to zero instead of throwing', async () => {
+    // The reset header carries garbage on purpose. Without it the resetIn5h assertion would be
+    // vacuous — an absent header is 0 anyway — and it would miss the case that mattered:
+    // parseInt returns NaN, Math.max(0, NaN) is NaN, and NaN reaches the cache as JSON null,
+    // which the reader rejects, so every poll rewrote a file the next read threw away.
     const r = await fetchRateLimitData(credPath, reply({
       'anthropic-ratelimit-unified-5h-utilization': 'not-a-number',
       'anthropic-ratelimit-unified-7d-utilization': '-3',
+      'anthropic-ratelimit-unified-5h-reset': 'garbage',
       'anthropic-ratelimit-unified-5h-status': 'allowed',
     }));
     assert.strictEqual(r.utilization5h, 0);
     assert.strictEqual(r.utilization7d, 0);
     assert.strictEqual(r.resetIn5h, 0);
+    assert.ok(!Number.isNaN(r.resetIn5h), 'a garbage reset header must not yield NaN');
   });
 
   test('the z.ai-only fields stay absent for Anthropic', async () => {

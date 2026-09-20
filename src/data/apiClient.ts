@@ -216,10 +216,21 @@ export async function fetchRateLimitData(
   // 7d limit is only present on Claude.ai Max plans — detect by header presence
   const has7dLimit = reset7dStr !== null;
 
-  // Reset values are Unix timestamps in seconds (not ISO date strings)
+  // Reset values are Unix timestamps in seconds (not ISO date strings).
+  //
+  // A header we cannot parse must yield 0, not NaN. `Math.max(0, NaN)` is NaN, and NaN
+  // survives all the way to the cache, where JSON turns it into null and the reader rejects
+  // the whole record — so every poll would write a file the next read throws away, and the
+  // extension would call the API on every tick instead of using the cache.
   const nowSec = Date.now() / 1000;
-  const resetIn5h = reset5hStr ? Math.max(0, parseInt(reset5hStr, 10) - nowSec) : 0;
-  const resetIn7d = reset7dStr ? Math.max(0, parseInt(reset7dStr, 10) - nowSec) : 0;
+  const resetSeconds = (header: string | null): number => {
+    if (!header) { return 0; }
+    const at = parseInt(header, 10);
+    if (!isFinite(at)) { return 0; }
+    return Math.max(0, at - nowSec);
+  };
+  const resetIn5h = resetSeconds(reset5hStr);
+  const resetIn7d = resetSeconds(reset7dStr);
 
   let limitStatus: 'allowed' | 'allowed_warning' | 'denied';
   if (status5h === 'denied') {

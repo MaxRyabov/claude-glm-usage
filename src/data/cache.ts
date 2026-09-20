@@ -59,8 +59,10 @@ function validateAmounts(v: unknown): QuotaAmounts | null | 'invalid' {
   const a = v as Record<string, unknown>;
   if (typeof a.used !== 'number' || !isFinite(a.used) || a.used < 0) { return 'invalid'; }
   if (typeof a.total !== 'number' || !isFinite(a.total) || a.total <= 0) { return 'invalid'; }
+  // Bounded like `used`: a negative remainder is not a well-formed amount, and a tampered
+  // cache carrying one would render it on the dashboard until the TTL expired.
   if (a.remaining !== undefined &&
-      (typeof a.remaining !== 'number' || !isFinite(a.remaining))) { return 'invalid'; }
+      (typeof a.remaining !== 'number' || !isFinite(a.remaining) || a.remaining < 0)) { return 'invalid'; }
   return a as unknown as QuotaAmounts;
 }
 
@@ -117,7 +119,23 @@ export async function readCache(): Promise<CacheFile | null> {
   }
 }
 
+/** The reader's range checks, applied before writing so we never persist a rejected record. */
+function isWritableRateLimit(data: RateLimitData): boolean {
+  const inUnitRange = (v: unknown): boolean =>
+    typeof v === 'number' && v >= 0 && v <= 1;
+  const isFiniteSeconds = (v: unknown): boolean =>
+    typeof v === 'number' && isFinite(v) && v >= 0;
+  return inUnitRange(data.utilization5h) && inUnitRange(data.utilization7d)
+    && isFiniteSeconds(data.resetIn5h) && isFiniteSeconds(data.resetIn7d)
+    && ['allowed', 'allowed_warning', 'denied'].includes(data.limitStatus);
+}
+
 export async function writeCache(data: RateLimitData, providerType: string): Promise<void> {
+  // Writing a record our own reader rejects is worse than writing nothing: readCache returns
+  // null, the scheduler reads that as "no cache", and the extension polls the API on every
+  // tick while each poll rewrites the same unreadable file.
+  if (!isWritableRateLimit(data)) { return; }
+
   const nowSec = Date.now() / 1000;
   const usageData: CacheFile['usageData'] = {
     utilization5h: data.utilization5h,

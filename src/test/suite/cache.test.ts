@@ -262,3 +262,58 @@ suite('Cache schema v4', () => {
     }
   });
 });
+
+suite('Cache write-side guards', () => {
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-status-guard-'));
+  const base = {
+    utilization5h: 0.2, utilization7d: 0.4, resetIn5h: 900, resetIn7d: 86400,
+    limitStatus: 'allowed' as const, has7dLimit: true,
+  };
+
+  async function writeAndRead(over: Record<string, unknown>): Promise<unknown> {
+    const dir = tmp();
+    const previous = process.env['CLAUDE_STATUS_CACHE_PATH'];
+    process.env['CLAUDE_STATUS_CACHE_PATH'] = path.join(dir, 'cache.json');
+    try {
+      await writeCache({ ...base, ...over } as Parameters<typeof writeCache>[0], 'claude-ai');
+      const raw = fs.readFileSync(getCachePath(), 'utf-8');
+      return validateCacheFile(JSON.parse(raw));
+    } catch {
+      return 'not-written';
+    } finally {
+      try {
+        if (previous === undefined) { delete process.env['CLAUDE_STATUS_CACHE_PATH']; }
+        else { process.env['CLAUDE_STATUS_CACHE_PATH'] = previous; }
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch { /* ignore cleanup failures */ }
+    }
+  }
+
+  test('a record the reader would reject is never written', async () => {
+    // A malformed upstream reset header used to reach here as NaN, serialise to JSON null and
+    // be rejected on read — so every poll rewrote a file the next read discarded, and the
+    // extension called the API on every tick instead of using its cache.
+    assert.strictEqual(await writeAndRead({ resetIn5h: NaN }), 'not-written');
+    assert.strictEqual(await writeAndRead({ utilization5h: 1.5 }), 'not-written');
+    assert.strictEqual(await writeAndRead({ utilization7d: NaN }), 'not-written');
+    assert.strictEqual(await writeAndRead({ limitStatus: 'nonsense' }), 'not-written');
+  });
+
+  test('a well-formed record still round-trips', async () => {
+    const back = await writeAndRead({});
+    assert.notStrictEqual(back, 'not-written', 'a valid record must still be written');
+    assert.ok(back, 'and must validate on read');
+  });
+
+  test('a negative remaining amount is rejected', () => {
+    const nowSec = Date.now() / 1000;
+    const record = {
+      version: 4, updatedAt: new Date().toISOString(), providerType: 'z-ai',
+      usageData: {
+        ...base, reset5hAt: nowSec + 900, reset7dAt: nowSec + 86400,
+        credits5h: { used: 10, total: 100, remaining: -100 },
+      },
+    };
+    assert.strictEqual(validateCacheFile(record), null);
+  });
+});
