@@ -226,12 +226,12 @@ suite('Cache schema v4', () => {
     // The defect this replaces: has7dLimit was derived from `reset7dAt > 0`, and writeCache
     // stores `now + resetIn7d` — ~1.8e9 even when resetIn7d is 0 — so every cached read
     // claimed a weekly window, for every provider including Anthropic Pro.
+    // Redirect the cache to a temp file for the duration: writing the user's real cache races
+    // with their running extension, which rewrites it on a 60-second timer.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-status-cache-'));
+    const previous = process.env['CLAUDE_STATUS_CACHE_PATH'];
+    process.env['CLAUDE_STATUS_CACHE_PATH'] = path.join(tmpDir, 'cache.json');
     const cachePath = getCachePath();
-    // Read defensively rather than exists-then-read: the live extension writes this same file
-    // on its own timer, so the file can vanish between the two calls and throw before the
-    // try/finally that is supposed to restore it.
-    let saved: string | null = null;
-    try { saved = fs.readFileSync(cachePath, 'utf-8'); } catch { /* no cache to preserve */ }
     try {
       await writeCache({
         utilization5h: 0.2, utilization7d: 0, resetIn5h: 900, resetIn7d: 0,
@@ -253,11 +253,12 @@ suite('Cache schema v4', () => {
       assert.strictEqual(weekly?.usageData.planLevel, 'max');
       assert.deepStrictEqual(weekly?.usageData.credits5h, { used: 269, total: 28000, remaining: 27730 });
     } finally {
-      // Guarded like the M-1 suite above: a failed restore must not mask a failed assertion.
+      // Guarded: a failed cleanup must not mask a failed assertion.
       try {
-        if (saved !== null) { fs.writeFileSync(cachePath, saved); }
-        else { fs.unlinkSync(cachePath); }
-      } catch { /* ignore restore failures */ }
+        if (previous === undefined) { delete process.env['CLAUDE_STATUS_CACHE_PATH']; }
+        else { process.env['CLAUDE_STATUS_CACHE_PATH'] = previous; }
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch { /* ignore cleanup failures */ }
     }
   });
 });

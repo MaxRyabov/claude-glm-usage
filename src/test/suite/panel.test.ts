@@ -48,22 +48,23 @@ suite('WebView credit amounts and plan tier', () => {
       'plan badge must default to hidden',
     );
   });
-
   test('the plan tier is written as text, never as markup', () => {
     // planLevel is a free-form string from an external API that also lands in the on-disk
-    // cache, so it must never reach innerHTML.
+    // cache, so it must never reach a markup sink.
     assert.ok(html.includes('badge.textContent = level'), 'plan tier must be set via textContent');
+
     // Scoped to the externally-sourced values rather than banning markup sinks outright: the
     // dashboard legitimately builds project and chart markup that way, escaping as it goes.
-    // What must never happen is the quota values reaching one. Assignment, append and
+    // What must never happen is a quota value reaching one. Assignment, append and
     // insertAdjacentHTML are all covered; the identifiers are the specific ones this change
-    // introduces, not generic words like "total" that appear all over the cost rendering.
-    const sinks = html.match(/(?:\.(?:inner|outer)HTML\s*\+?=|insertAdjacentHTML\s*\()[^;]*/g) ?? [];
-    const tainted = sinks.filter(sink => /(planLevel|credits5h|credits7d|amounts)/.test(sink));
+    // introduces, not generic words like "total" that appear throughout the cost rendering.
+    const SINKS = /(?:\.(?:inner|outer)HTML\s*\+?=|insertAdjacentHTML\s*\()[^;]*/g;
+    const QUOTA_VALUES = /planLevel|credits5h|credits7d|amounts/;
+    const tainted = (html.match(SINKS) ?? []).filter((sink) => QUOTA_VALUES.test(sink));
     assert.deepStrictEqual(tainted, [], 'quota values must not reach a markup sink');
   });
 
   test('amounts are written as text too', () => {
-    assert.ok(/el\.textContent = parts\.join/.test(html), 'amounts must be set via textContent');
+    assert.ok(html.includes('el.textContent = tmpl'), 'amounts must be set via textContent');
   });
 });

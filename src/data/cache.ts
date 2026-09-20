@@ -44,7 +44,12 @@ interface CacheFile {
  * exists while `writeCache` scribbled fixture quotas into the user's real cache.
  */
 export function getCachePath(): string {
-  return path.join(os.homedir(), '.claude', 'vscode-claude-status-cache.json');
+  // The override exists so tests can point at a temp directory. Without it a round-trip test
+  // writes the user's real cache while their running extension rewrites the same file on its
+  // own timer — a race that has failed runs here in practice, not just in theory. Unset in
+  // production, so normal behaviour is unchanged.
+  return process.env['CLAUDE_STATUS_CACHE_PATH']
+    ?? path.join(os.homedir(), '.claude', 'vscode-claude-status-cache.json');
 }
 
 /** Optional absolute amounts: present and well-formed, or absent. Anything else is corrupt. */
