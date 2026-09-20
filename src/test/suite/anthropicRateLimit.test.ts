@@ -10,6 +10,9 @@ import { PollBackoff } from '../../data/authBackoff';
  * itself touches shared ground (the cache schema, the webview). These tests pin the behaviour
  * that must NOT move.
  */
+/** Exactly what `setup` below creates — see the note on the sweep in `suiteSetup`. */
+const FIXTURE_DIR = /^test-anthropic-\d+-\d+$/;
+
 suite('Anthropic rate-limit headers', () => {
   // Read per test, not at module load: fetchRateLimitData takes its own Date.now() reading
   // internally, so a timestamp captured when the file was loaded drifts by however long the
@@ -21,13 +24,24 @@ suite('Anthropic rate-limit headers', () => {
   // Sweep residue from runs that were killed between setup and teardown (CI timeout, crash).
   // The path guard in fetchRateLimitData confines credentials to ~/.claude, so the fixtures
   // cannot live in a temp sandbox — but they should not accumulate there either.
+  //
+  // This deletes inside the user's live config directory, so the match is the exact shape this
+  // suite creates (`test-anthropic-<pid>-<epoch ms>`) rather than a prefix: a directory of
+  // someone else's that merely started with `test-anthropic-` would otherwise be destroyed.
+  // It must also contain nothing but our own fixture file before it is removed.
   suiteSetup(async () => {
     const claudeDir = path.join(os.homedir(), '.claude');
     let entries: string[] = [];
     try { entries = await fs.readdir(claudeDir); } catch { return; }
-    for (const name of entries.filter(e => e.startsWith('test-anthropic-'))) {
-      try { await fs.rm(path.join(claudeDir, name), { recursive: true, force: true }); }
-      catch { /* a directory we cannot remove is not worth failing the suite over */ }
+    for (const name of entries.filter(e => FIXTURE_DIR.test(e))) {
+      const dir = path.join(claudeDir, name);
+      try {
+        const contents = await fs.readdir(dir);
+        if (contents.length > 1 || (contents.length === 1 && contents[0] !== '.credentials.json')) {
+          continue; // not ours after all — leave it alone
+        }
+        await fs.rm(dir, { recursive: true, force: true });
+      } catch { /* a directory we cannot inspect or remove is not worth failing the suite over */ }
     }
   });
 

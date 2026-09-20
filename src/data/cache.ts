@@ -139,8 +139,11 @@ export async function writeCache(data: RateLimitData, providerType: string): Pro
       data.planLevel.length > 0 && data.planLevel.length <= MAX_LEVEL_LENGTH) {
     usageData.planLevel = data.planLevel;
   }
-  if (data.credits5h !== undefined) { usageData.credits5h = data.credits5h; }
-  if (data.credits7d !== undefined) { usageData.credits7d = data.credits7d; }
+  // Same reasoning as planLevel above: run the amounts through the reader's own check, so we
+  // never persist a record readCache would throw away on every tick. `parseZaiQuota` already
+  // rejects unusable amounts, but writeCache takes a RateLimitData from any producer.
+  if (validateAmounts(data.credits5h) !== 'invalid') { usageData.credits5h = data.credits5h; }
+  if (validateAmounts(data.credits7d) !== 'invalid') { usageData.credits7d = data.credits7d; }
 
   const cache: CacheFile = {
     version: CACHE_VERSION,
