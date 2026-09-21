@@ -70,6 +70,29 @@ suite('StatusBar', () => {
     assert.ok(label.includes('✗'), `Expected ✗ in: ${label}`);
   });
 
+  test('buildLabel marks the window that is actually exhausted', () => {
+    // z.ai denies on whichever window hits 100%, and a live token tariff sits at 100% weekly
+    // with an empty 5-hour window. The label used to print a flat "5h:100%✗" and drop the
+    // weekly part, stating the exact opposite of the truth.
+    const label = buildLabel(makeData({
+      providerType: 'z-ai', limitStatus: 'denied', dataSource: 'cache',
+      utilization5h: 0, utilization7d: 1, has7dLimit: true,
+    }));
+    assert.ok(label.includes('5h:0%'), `5h window must show its real value: ${label}`);
+    assert.ok(label.includes('7d:100%✗'), `the weekly window must carry the mark: ${label}`);
+    assert.ok(!label.includes('5h:100%'), `the 5h window must not be claimed spent: ${label}`);
+  });
+
+  test('buildLabel keeps the mark on the 5h window when Anthropic denies by header', () => {
+    // Anthropic's denial comes from the 5-hour status header and can arrive without either
+    // utilization reaching 1.
+    const label = buildLabel(makeData({
+      providerType: 'claude-ai', limitStatus: 'denied', dataSource: 'cache',
+      utilization5h: 0.98, utilization7d: 0.4, has7dLimit: true,
+    }));
+    assert.ok(label.includes('5h:98%✗'), `expected the 5h window to carry the mark: ${label}`);
+  });
+
   test('buildLabel shows ⚠ when utilization >= 75%', () => {
     const label = buildLabel(makeData({
       utilization5h: 0.80,

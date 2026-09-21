@@ -11,14 +11,19 @@ import {
   detectProvider,
   RateLimitData,
   ClaudeProvider,
+  ZaiAuthError,
+  ZaiFormatError,
+  QuotaAmounts,
+  QuotaBilling,
 } from './apiClient';
-import { readCache, writeCache, isCacheValid, getCacheAge } from './cache';
+import { readCache, writeCache, isCacheValid, getCacheAge, CacheFile } from './cache';
 import { acquireApiPollLock, releaseApiPollLock } from './apiLock';
 import { getAllProjectCosts, workspacePathToHash, ProjectCostData } from './projectCost';
 import { computePrediction, PredictionData } from './prediction';
 import { getHeatmapData as computeHeatmapData, HeatmapData } from '../webview/heatmap';
 import { loadPersistedCache, persistCache } from './entryCache';
 import { readSnapshot, writeSnapshot } from './snapshotCache';
+import { PollBackoff } from './authBackoff';
 import { config } from '../config';
 
 export { PredictionData, HeatmapData };
@@ -44,16 +49,34 @@ export interface ClaudeUsageData {
   has7dLimit: boolean      // false for plans without a 7d window or non-Claude.ai providers
   providerType: ClaudeProvider
 
+  // z.ai only: absolute credit amounts and plan tier, absent for every other provider
+  // and for token-based z.ai tariffs, which report percentages only.
+  billing?: QuotaBilling
+  planLevel?: string
+  credits5h?: QuotaAmounts
+  credits7d?: QuotaAmounts
+
   // Metadata
   lastUpdated: Date
   cacheAge: number
-  dataSource: 'api' | 'cache' | 'stale' | 'no-credentials' | 'no-data' | 'local-only'
+  // 'auth-rejected' is distinct from 'stale' on purpose: a network blip resolves itself,
+  // a revoked key does not, and the user can only act on the second if we say which it is.
+  dataSource: 'api' | 'cache' | 'stale' | 'no-credentials' | 'no-data' | 'local-only' | 'auth-rejected'
 }
 
 export { ProjectCostData };
 
 export class DataManager {
   private static instance: DataManager;
+
+  /**
+   * Suppresses polling after the provider refuses our credentials — see `AuthBackoff`.
+   *
+   * Held in memory rather than on disk: a window reload re-arms it, which is acceptable
+   * because the case this protects against is a window sitting idle for hours. An explicit
+   * user-driven refresh deliberately bypasses it.
+   */
+  private readonly pollBackoff = new PollBackoff<ClaudeProvider>();
   private readonly _onDidUpdate = new vscode.EventEmitter<ClaudeUsageData>();
   readonly onDidUpdate: vscode.Event<ClaudeUsageData> = this._onDidUpdate.event;
 
@@ -132,7 +155,7 @@ export class DataManager {
     const hasCostData = localUsage.cost7d > 0 || localUsage.cost5h > 0;
 
     if (supportsRateLimit && config.rateLimitApiEnabled) {
-      if (forceRefresh || (await this.shouldCallApi(cache))) {
+      if (forceRefresh || (await this.shouldCallApi(cache, providerType))) {
         // All windows share one quota and one rate-limit cache — only the window that
         // wins the cross-process lock polls; the rest reuse its cached result.
         if (!(await acquireApiPollLock())) {
@@ -156,13 +179,23 @@ export class DataManager {
                 ? await this.fetchZaiRateLimit()
                 : await fetchRateLimitData(config.credentialsPath);
               await writeCache(rateLimitData, providerType);
+              this.pollBackoff.clear();
               dataSource = 'api';
             }
-          } catch {
+          } catch (err) {
             // missing token/credentials or network error — fall back to cache, else cost-only
+            const rejected = err instanceof ZaiAuthError;
+            // A payload we cannot parse will not parse in sixty seconds either, so it backs
+            // off like a refused key. Network and upstream faults stay retryable.
+            if (rejected) { this.pollBackoff.record(providerType, 'credentials'); }
+            else if (err instanceof ZaiFormatError) { this.pollBackoff.record(providerType, 'format'); }
             if (cache) {
               rateLimitData = this.cacheToRateLimitData(cache.usageData);
-              dataSource = isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale';
+              dataSource = rejected
+                ? 'auth-rejected'
+                : (isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale');
+            } else if (rejected) {
+              dataSource = 'auth-rejected';
             } else {
               dataSource = hasCostData ? 'local-only' : 'no-credentials';
             }
@@ -170,11 +203,21 @@ export class DataManager {
             await releaseApiPollLock();
           }
         }
-      } else if (cache) {
-        rateLimitData = this.cacheToRateLimitData(cache.usageData);
-        dataSource = isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale';
       } else {
-        dataSource = hasCostData ? 'local-only' : 'no-data';
+        // While a credential rejection is being backed off we skip the call, but the reason
+        // must survive: reverting to 'stale' here would tell the user their data is merely
+        // old, on every tick after the first.
+        const rejected = this.isAuthRejectionActive(providerType);
+        if (cache) {
+          rateLimitData = this.cacheToRateLimitData(cache.usageData);
+          dataSource = rejected
+            ? 'auth-rejected'
+            : (isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale');
+        } else if (rejected) {
+          dataSource = 'auth-rejected';
+        } else {
+          dataSource = hasCostData ? 'local-only' : 'no-data';
+        }
       }
     } else if (supportsRateLimit && cache) {
       // API disabled by user but cache exists — show stale rate limit data with age indicator
@@ -195,6 +238,12 @@ export class DataManager {
       limitStatus: rateLimitData?.limitStatus ?? 'allowed',
       has7dLimit: rateLimitData?.has7dLimit ?? false,
       providerType,
+      // Spread conditionally so the keys stay absent rather than present-and-undefined:
+      // the dashboard decides what to render on presence alone.
+      ...(rateLimitData?.billing !== undefined ? { billing: rateLimitData.billing } : {}),
+      ...(rateLimitData?.planLevel !== undefined ? { planLevel: rateLimitData.planLevel } : {}),
+      ...(rateLimitData?.credits5h !== undefined ? { credits5h: rateLimitData.credits5h } : {}),
+      ...(rateLimitData?.credits7d !== undefined ? { credits7d: rateLimitData.credits7d } : {}),
       ...localUsage,
       lastUpdated: new Date(),
       cacheAge,
@@ -205,13 +254,7 @@ export class DataManager {
     return data;
   }
 
-  private cacheToRateLimitData(usageData: {
-    utilization5h: number
-    utilization7d: number
-    reset5hAt: number
-    reset7dAt: number
-    limitStatus: string
-  }): RateLimitData {
+  private cacheToRateLimitData(usageData: CacheFile['usageData']): RateLimitData {
     const nowSec = Date.now() / 1000;
     return {
       utilization5h: usageData.utilization5h,
@@ -219,8 +262,15 @@ export class DataManager {
       resetIn5h: Math.max(0, usageData.reset5hAt - nowSec),
       resetIn7d: Math.max(0, usageData.reset7dAt - nowSec),
       limitStatus: usageData.limitStatus as RateLimitData['limitStatus'],
-      // Derive from cached reset timestamp: non-zero means a 7d limit exists
-      has7dLimit: usageData.reset7dAt > 0,
+      // v4 stores this explicitly. The old derivation (`reset7dAt > 0`) was always true,
+      // because writeCache stores `now + resetIn7d` — ~1.8e9 even when resetIn7d is 0 — so
+      // every cached read claimed a weekly window, for every provider including Anthropic Pro.
+      // A v3 record has no boolean to read, so it keeps the old derivation.
+      has7dLimit: usageData.has7dLimit ?? usageData.reset7dAt > 0,
+      ...(usageData.billing !== undefined ? { billing: usageData.billing } : {}),
+      ...(usageData.planLevel !== undefined ? { planLevel: usageData.planLevel } : {}),
+      ...(usageData.credits5h !== undefined ? { credits5h: usageData.credits5h } : {}),
+      ...(usageData.credits7d !== undefined ? { credits7d: usageData.credits7d } : {}),
     };
   }
 
@@ -233,12 +283,28 @@ export class DataManager {
     return fetchZaiQuota(baseUrl, token);
   }
 
-  private async shouldCallApi(cache: Awaited<ReturnType<typeof readCache>>): Promise<boolean> {
+  private async shouldCallApi(
+    cache: Awaited<ReturnType<typeof readCache>>,
+    providerType: ClaudeProvider,
+  ): Promise<boolean> {
+    // A refused credential suppresses polling for one TTL. Network and upstream failures are
+    // deliberately NOT suppressed this way — those are transient and worth retrying, whereas
+    // a revoked key will still be revoked in five minutes.
+    if (this.isPollSuppressed(providerType)) { return false; }
     if (!cache) { return true; }
     if (!isCacheValid(cache, config.cacheTtlSeconds)) {
       return await wasJsonlUpdatedRecently(300);
     }
     return false;
+  }
+
+  /** Whether the CREDENTIAL rejection is what is currently suppressing polling. */
+  private isAuthRejectionActive(providerType: ClaudeProvider): boolean {
+    return this.pollBackoff.activeReason(providerType, config.cacheTtlSeconds) === 'credentials';
+  }
+
+  private isPollSuppressed(providerType: ClaudeProvider): boolean {
+    return this.pollBackoff.isActive(providerType, config.cacheTtlSeconds);
   }
 
   async refreshProjectCosts(): Promise<void> {

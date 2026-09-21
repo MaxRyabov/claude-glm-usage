@@ -102,5 +102,9 @@
   "Less than 30 min remaining. Wrap up current task.": "残り30分未満。現在のタスクを終わらせてください。",
   "Less than 10 min remaining. Save your work and pause.": "残り10分未満。作業を保存して一時停止してください。",
   "Rate limit reached. Wait for reset.": "レート制限に達しました。リセットまでお待ちください。",
-  "msgs": "件"
+  "msgs": "件",
+  "🤖 API key rejected": "🤖 APIキーが拒否されました",
+  "The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json": "プロバイダーが API キーを拒否しました。\n~/.claude/settings.json の ANTHROPIC_AUTH_TOKEN（または ANTHROPIC_API_KEY）を確認してください",
+  "{0} of {1} credits used": "{1} 中 {0} クレジット使用",
+  "{0} of {1} credits used — {2} left": "{1} 中 {0} クレジット使用 — 残り {2}"
 }

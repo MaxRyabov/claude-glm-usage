@@ -47,6 +47,9 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
   if (dataSource === 'no-data') {
     return vscode.l10n.t('🤖 Claude: run refresh');
   }
+  if (dataSource === 'auth-rejected') {
+    return vscode.l10n.t('🤖 API key rejected');
+  }
 
   const isStale = dataSource === 'stale';
   const staleSuffix = isStale ? ` [${formatDuration(cacheAge)} ago]` : '';
@@ -63,20 +66,27 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
     part5h = `5h:$${cost5h.toFixed(2)}`;
     part7d = ` 7d:$${cost7d.toFixed(2)}`;
   } else {
-    // percent mode — Claude.ai only
-    if (limitStatus === 'denied') {
-      part5h = `5h:100%✗`;
-      part7d = '';
-    } else {
-      const warn5h = utilization5h >= 0.75 ? '⚠' : '';
-      part5h = `5h:${formatPercent(utilization5h)}${warn5h}`;
-      if (has7dLimit) {
-        const warn7d = utilization7d >= 0.75 ? '⚠' : '';
-        part7d = ` 7d:${formatPercent(utilization7d)}${warn7d}`;
-      } else {
-        part7d = '';
-      }
-    }
+    // percent mode — claude-ai and z-ai
+    //
+    // The denial marker goes on the window that is actually spent. This used to print a flat
+    // "5h:100%✗" and hide the weekly window, which was true for Anthropic — its denial comes
+    // from the 5-hour status header — but not for z.ai, where either window can reach 100%.
+    // A live token tariff sits at 100% weekly with an empty 5-hour window, and the old text
+    // said exactly the opposite of that.
+    const denied = limitStatus === 'denied';
+    // Anthropic can deny via the header without either utilization reaching 1; that denial
+    // refers to the 5-hour window, so it keeps the marker.
+    const deniedWithoutFullWindow =
+      denied && utilization5h < 1 && !(has7dLimit && utilization7d >= 1);
+    const marker = (utilization: number, forceDenied: boolean): string => {
+      if (utilization >= 1 || forceDenied) { return '✗'; }
+      return utilization >= 0.75 ? '⚠' : '';
+    };
+
+    part5h = `5h:${formatPercent(utilization5h)}${marker(utilization5h, deniedWithoutFullWindow)}`;
+    part7d = has7dLimit
+      ? ` 7d:${formatPercent(utilization7d)}${marker(utilization7d, false)}`
+      : '';
   }
 
   // Project cost suffix
@@ -109,6 +119,9 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
   }
   if (dataSource === 'no-data') {
     return vscode.l10n.t('No usage data found.\nClick to open dashboard →');
+  }
+  if (dataSource === 'auth-rejected') {
+    return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json');
   }
 
   const lastUpdated = cacheAge < 60
@@ -163,7 +176,9 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
 function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
   const { limitStatus, dataSource, providerType } = data;
 
-  if (dataSource === 'no-credentials') {
+  // A refused credential is the user's problem to fix, so it gets the error colour rather
+  // than the muted one used for data that is merely stale.
+  if (dataSource === 'no-credentials' || dataSource === 'auth-rejected') {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     item.color = new vscode.ThemeColor('statusBarItem.errorForeground');
     return;

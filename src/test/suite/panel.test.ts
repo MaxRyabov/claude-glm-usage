@@ -27,3 +27,44 @@ suite('WebView CSP / Chart.js bundling', () => {
     );
   });
 });
+
+suite('WebView credit amounts and plan tier', () => {
+  test('the amounts blocks start hidden, so a provider without them shows nothing', () => {
+    // Every provider but z.ai, and every token-based z.ai tariff, reports no amounts at all.
+    // Rendering is driven purely by presence, so the default state has to be hidden.
+    assert.ok(
+      /id="usage-5h-amounts"[^>]*style="display:none"/.test(html),
+      '5h amounts block must default to hidden',
+    );
+    assert.ok(
+      /id="usage-7d-amounts"[^>]*style="display:none"/.test(html),
+      '7d amounts block must default to hidden',
+    );
+  });
+
+  test('the plan tier badge starts hidden', () => {
+    assert.ok(
+      /id="plan-badge"[^>]*style="display:none"/.test(html),
+      'plan badge must default to hidden',
+    );
+  });
+  test('the plan tier is written as text, never as markup', () => {
+    // planLevel is a free-form string from an external API that also lands in the on-disk
+    // cache, so it must never reach a markup sink.
+    assert.ok(html.includes('badge.textContent = level'), 'plan tier must be set via textContent');
+
+    // Scoped to the externally-sourced values rather than banning markup sinks outright: the
+    // dashboard legitimately builds project and chart markup that way, escaping as it goes.
+    // What must never happen is a quota value reaching one. Assignment, append and
+    // insertAdjacentHTML are all covered; the identifiers are the specific ones this change
+    // introduces, not generic words like "total" that appear throughout the cost rendering.
+    const SINKS = /(?:\.(?:inner|outer)HTML\s*\+?=|insertAdjacentHTML\s*\()[^;]*/g;
+    const QUOTA_VALUES = /planLevel|credits5h|credits7d|amounts/;
+    const tainted = (html.match(SINKS) ?? []).filter((sink) => QUOTA_VALUES.test(sink));
+    assert.deepStrictEqual(tainted, [], 'quota values must not reach a markup sink');
+  });
+
+  test('amounts are written as text too', () => {
+    assert.ok(html.includes('el.textContent = tmpl'), 'amounts must be set via textContent');
+  });
+});

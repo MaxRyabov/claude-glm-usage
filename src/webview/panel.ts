@@ -87,6 +87,11 @@ function buildI18n(): Record<string, string> {
     more:                  t('More'),
     avgByHour:             t('Avg cost by hour of day (last 30 days)'),
     resetsIn:              t('resets in'),
+    // Whole phrases with placeholders, not fragments joined at render time: a translator has
+    // to be able to reorder the words, and Russian needs the number and the noun apart —
+    // "1 кредитов" and "2 кредитов" are both wrong for a concatenated form.
+    creditsUsage:          t('{0} of {1} credits used', '__N__', '__N2__'),
+    creditsUsageLeft:      t('{0} of {1} credits used — {2} left', '__N__', '__N2__', '__N3__'),
     calculating:           t('Calculating…'),
     cacheTtl:              t('Cache TTL'),
     limitIn5hCritical:     t('⛔ 5h limit in ~'),
@@ -211,6 +216,21 @@ export function getWebviewContent(
       border-radius: 4px;
       background-color: var(--vscode-progressBar-background);
       transition: width 0.3s ease;
+    }
+    .amounts {
+      margin-top: 3px;
+      font-size: 0.85em;
+      opacity: 0.75;
+      text-align: right;
+    }
+    .plan-badge {
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 0.75em;
+      text-transform: uppercase;
+      background-color: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
     }
     .progress-fill.warning { background-color: var(--vscode-editorWarning-foreground); }
     .progress-fill.error   { background-color: var(--vscode-editorError-foreground); }
@@ -417,7 +437,10 @@ export function getWebviewContent(
 
   <!-- Current Usage -->
   <div class="card">
-    <div class="card-title">${i18n.currentUsage}</div>
+    <div class="card-title">
+      ${i18n.currentUsage}
+      <span class="plan-badge" id="plan-badge" style="display:none"></span>
+    </div>
     <div class="progress-row">
       <div class="progress-labels">
         <span>${i18n.window5h}</span>
@@ -426,6 +449,7 @@ export function getWebviewContent(
       <div class="progress-track">
         <div class="progress-fill" id="usage-5h-fill" style="width:0%"></div>
       </div>
+      <div class="amounts" id="usage-5h-amounts" style="display:none"></div>
     </div>
     <div class="progress-row" id="usage-7d-row">
       <div class="progress-labels">
@@ -435,6 +459,7 @@ export function getWebviewContent(
       <div class="progress-track">
         <div class="progress-fill" id="usage-7d-fill" style="width:0%"></div>
       </div>
+      <div class="amounts" id="usage-7d-amounts" style="display:none"></div>
     </div>
   </div>
 
@@ -603,23 +628,28 @@ export function getWebviewContent(
             '$' + usage.cost7d.toFixed(2) + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
         }
       } else {
-        // percent mode — claude-ai only
-        const warn5h = usage.utilization5h >= 0.75 ? ' ⚠' : '';
-        const deniedFlag = denied ? '✗' : '';
+        // percent mode — claude-ai and z-ai. The denial mark belongs on the window that is
+        // actually spent: z.ai denies on whichever window reaches 100%, and a live token
+        // tariff sits at 100% weekly with an empty 5-hour window. Anthropic denies through
+        // its 5-hour status header, which can arrive without either window reaching 100%,
+        // so that case keeps the mark on the 5-hour window.
+        const deniedWithoutFullWindow =
+          denied && usage.utilization5h < 1 && !(show7d && usage.utilization7d >= 1);
         document.getElementById('usage-5h-label').textContent =
-          pct(usage.utilization5h) + warn5h + deniedFlag + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h);
+          pct(usage.utilization5h) + mark(usage.utilization5h, deniedWithoutFullWindow) +
+          ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h);
         if (show7d) {
-          const warn7d = usage.utilization7d >= 0.75 ? ' ⚠' : '';
           document.getElementById('usage-7d-label').textContent =
-            pct(usage.utilization7d) + warn7d + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
+            pct(usage.utilization7d) + mark(usage.utilization7d, false) +
+            ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
         }
       }
 
+      const denied5h = denied && (usage.utilization5h >= 1 || !(show7d && usage.utilization7d >= 1));
       const fill5h = document.getElementById('usage-5h-fill');
       if (hasRateData) {
         fill5h.style.width = Math.min(100, usage.utilization5h * 100) + '%';
-        fill5h.className = 'progress-fill' +
-          (denied ? ' error' : usage.utilization5h >= 0.75 ? ' warning' : '');
+        fill5h.className = 'progress-fill' + fillClassFor(usage.utilization5h, denied5h);
       } else {
         fill5h.style.width = '0%';
         fill5h.className = 'progress-fill';
@@ -628,7 +658,19 @@ export function getWebviewContent(
       if (show7d) {
         const fill7d = document.getElementById('usage-7d-fill');
         fill7d.style.width = Math.min(100, usage.utilization7d * 100) + '%';
-        fill7d.className = 'progress-fill' + (usage.utilization7d >= 0.75 ? ' warning' : '');
+        fill7d.className = 'progress-fill' + fillClassFor(usage.utilization7d, denied && usage.utilization7d >= 1);
+      }
+
+      // Absolute credit amounts and plan tier: credit-based z.ai tariffs only. Token tariffs
+      // report a percentage and nothing else, and no other provider reports either — so both
+      // are driven purely by presence, never by provider name.
+      renderAmounts('usage-5h-amounts', hasRateData ? usage.credits5h : null);
+      renderAmounts(show7d ? 'usage-7d-amounts' : null, hasRateData ? usage.credits7d : null);
+      const badge = document.getElementById('plan-badge');
+      if (badge) {
+        const level = hasRateData ? usage.planLevel : null;
+        badge.style.display = level ? '' : 'none';
+        badge.textContent = level ? String(level) : '';
       }
 
       document.getElementById('cost-5h').textContent  = '$' + usage.cost5h.toFixed(2);
@@ -1204,6 +1246,43 @@ export function getWebviewContent(
           });
         }
       }
+    }
+
+    // "16 693 credits used of 28 000 — 11 306 left". The remaining amount is optional: z.ai
+    // does not always send it, and it must never be recomputed from the other two, because
+    // upstream rounds it (28000 - 16693 = 11307 arrives as 11306, credits being fractional).
+    function renderAmounts(elementId, amounts) {
+      if (!elementId) { return; }
+      const el = document.getElementById(elementId);
+      if (!el) { return; }
+      if (!amounts || typeof amounts.used !== 'number' || typeof amounts.total !== 'number') {
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+      }
+      const hasRemaining = typeof amounts.remaining === 'number';
+      const tmpl = hasRemaining ? i18n.creditsUsageLeft : i18n.creditsUsage;
+      el.style.display = '';
+      // Global replace: a translation is free to use a placeholder twice, and a string
+      // replace would silently fill only the first one.
+      el.textContent = tmpl
+        .replace(/__N__/g, num(amounts.used))
+        .replace(/__N2__/g, num(amounts.total))
+        .replace(/__N3__/g, hasRemaining ? num(amounts.remaining) : '');
+    }
+
+    function num(v) {
+      return Math.round(v).toLocaleString();
+    }
+
+    function mark(utilization, forceDenied) {
+      if (utilization >= 1 || forceDenied) { return '✗'; }
+      return utilization >= 0.75 ? ' ⚠' : '';
+    }
+
+    function fillClassFor(utilization, isDenied) {
+      if (isDenied || utilization >= 1) { return ' error'; }
+      return utilization >= 0.75 ? ' warning' : '';
     }
 
     // Minimal HTML escape to prevent XSS from data strings
