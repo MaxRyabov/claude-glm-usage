@@ -9,6 +9,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [1.2.0] — 2026-09-21
+
 ### Fixed
 
 - **z.ai credit tariffs showed 0 % on every quota window.** Newer z.ai plans report their quota
@@ -22,9 +26,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A rejected z.ai API key was reported as "0 % used".** z.ai answers a refused token with
   HTTP 200 and a failure envelope, not 401, so an expired key was parsed as a healthy idle
   account and cached as fresh. The envelope is now inspected, the status bar says the key was
-  rejected, and polling backs off instead of retrying every minute. As a side effect the
-  bearer-to-raw-token fallback works for the first time — it was gated on an HTTP status the
-  live API never returns.
+  rejected, and polling backs off instead of retrying every minute. A z.ai response the
+  extension cannot parse backs off the same way rather than being polled on every tick. As a
+  side effect the bearer-to-raw-token fallback works for the first time — it was gated on an
+  HTTP status the live API never returns.
 - **Anthropic Pro plans showed a phantom weekly row.** Whether a weekly window exists was derived
   from a cached reset timestamp that is always non-zero, so any cache read claimed one existed —
   for every provider. It is now stored explicitly.
@@ -36,6 +41,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   window would be told its 5-hour window was spent while it was in fact empty. The mark and the
   red bar now go on the window that actually reached the limit, in both the status bar and the
   dashboard.
+- **A malformed Anthropic reset header made the extension poll the API on every tick.** An
+  unparseable header turned into `NaN`, which the cache could not store, so every read found no
+  usable cache and triggered a fresh request. An unreadable header now counts as no reset time,
+  and a record the cache would reject is never written in the first place.
+- **A cache entry dated in the future was treated as fresh forever**, so its data was never
+  refreshed. Such entries are now rejected.
 - The period unit map read weeks as days, making the weekly fallback reset horizon seven times
   too short.
 
@@ -43,7 +54,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Absolute credit amounts in the dashboard.** Credit-based z.ai tariffs now show used, total
   and remaining credits beside each quota bar, plus a plan tier badge. Token-based tariffs and
-  every other provider are unchanged — the display is driven by whether the data exists.
+  every other provider are unchanged — the display is driven by whether the data exists. Amounts
+  that look inconsistent with the reported percentage are withheld rather than shown wrong.
 - Quota percentages are derived from the absolute amounts where they are available, so the
   notification thresholds are no longer quantised by an integer percentage from upstream.
 

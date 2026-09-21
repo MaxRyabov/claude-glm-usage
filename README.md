@@ -58,7 +58,7 @@ auto-detects which one you're using from `~/.claude/settings.json`.
 
 | | Claude.ai (Pro / Max) | GLM / z.ai |
 |---|---|---|
-| **Rate-limit quota** | 5 h + 7 d utilization % (from Anthropic API) | Real 5 h + weekly quota (from z.ai monitor endpoint) |
+| **Rate-limit quota** | 5 h + 7 d utilization % (from Anthropic API) | Real 5 h + weekly quota (from z.ai monitor endpoint) — token and credit plans |
 | **Cost** | Per-model Claude pricing | Per-model **GLM** pricing (GLM-4.5/4.6/4.7/5.x, flash tiers free) |
 | **Detection** | credentials file / API key | `ANTHROPIC_BASE_URL` host `*.z.ai` |
 | **Status bar** | `🤖 5h:45% 7d:62%` | `🤖 5h:6% 7d:22%` (Z.AI / GLM) |
@@ -81,7 +81,10 @@ The extension then auto-detects z.ai and:
 
 - **shows your real z.ai quota** — the 5-hour and weekly utilization % from z.ai's subscription
   dashboard (fetched from `…/api/monitor/usage/quota/limit` using your `ANTHROPIC_AUTH_TOKEN`).
-  Falls back to cost-only if no token is found.
+  Both kinds of z.ai plan are supported: **token-based** plans report a percentage, while
+  **credit-based** plans also show the credits used, the total and what is left, plus your plan
+  tier. Falls back to cost-only if no token is found — and if z.ai **rejects** the key, the status
+  bar says so instead of showing a misleading 0 %.
 - **prices each entry by its GLM model** using a built-in GLM price table — so cost is accurate
   instead of Claude's ~5–7× higher rates. Override or add model rates with
   `claudeStatus.pricing.models`.
@@ -102,13 +105,15 @@ Real-time usage summary pinned to the VS Code status bar.
 | Normal (% mode, Claude.ai Max) | `🤖 5h:45% 7d:62%` |
 | GLM / z.ai (real quota) | `🤖 5h:6% 7d:22%` |
 | Warning ≥ 75% | `🤖 5h:78%⚠ 7d:84%⚠` |
-| Rate limit hit | `🤖 5h:100%✗` |
+| 5 h limit reached | `🤖 5h:100%✗ 7d:62%` |
+| Weekly limit reached | `🤖 5h:12% 7d:100%✗` |
 | 5h-only plan (no 7d window) | `🤖 5h:45%` |
 | Cost mode | `🤖 5h:$14.21 7d:$53.17` |
 | AWS Bedrock / API key (cost only) | `🤖 5h:$0.15 7d:$0.42` |
 | With project cost | `🤖 5h:78% 7d:84% \| my-app:$3.21` |
 | Stale cache | `🤖 5h:78% 7d:84% [10m ago]` |
 | Not logged in | `🤖 Not logged in` |
+| z.ai rejected the API key | `🤖 API key rejected` |
 
 Hover for a detailed tooltip with full token breakdown and reset times.
 
@@ -116,7 +121,9 @@ Hover for a detailed tooltip with full token breakdown and reset times.
 
 Click the status bar item to open a rich dashboard panel with:
 
-- **Current Usage** — colour-coded progress bars for 5 h and 7 d windows
+- **Current Usage** — colour-coded progress bars for 5 h and 7 d windows; the window that
+  reaches its limit turns red. On credit-based z.ai plans each bar also shows the credits used,
+  the total and what is left, with your plan tier next to the title
 - **Token Cost** — 5 h / today / 7 d / month (est.) costs; expandable **token breakdown**
   shows per-type counts (input / output / cache read / cache create) with individual costs
   and cache hit ratio
@@ -180,7 +187,7 @@ Number of days is configurable via `claudeStatus.heatmap.days` (30 / 60 / 90).
 | Provider | Authentication | Display |
 |----------|---------------|---------|
 | Claude.ai subscription | `claude login` — credentials stored in macOS Keychain (v2.x+) or `~/.claude/.credentials.json`; detected automatically | Rate-limit % + cost |
-| GLM / z.ai | `ANTHROPIC_AUTH_TOKEN` in `~/.claude/settings.json` | Real quota % + GLM cost |
+| GLM / z.ai | `ANTHROPIC_AUTH_TOKEN` in `~/.claude/settings.json` | Real quota % (+ credits on credit plans) + GLM cost |
 | AWS Bedrock | AWS credentials (env vars or `~/.aws/`) | Cost only |
 | Anthropic API key | `ANTHROPIC_API_KEY` env var | Cost only |
 
@@ -195,7 +202,7 @@ VS Code Settings.
 |------|--------------------|-----------|
 | Claude.ai Pro / Max (5h + 7d) | `5h:45% 7d:32%` | ✅ |
 | Claude.ai any 5h-only tier | `5h:45%` | auto-hidden |
-| **GLM / z.ai** | `5h:6% 7d:22%` (real quota) + cost per GLM model | ✅ (weekly) |
+| **GLM / z.ai** — token and credit plans | `5h:6% 7d:22%` (real quota) + cost per GLM model | ✅ (weekly) |
 | AWS Bedrock | cost only (`5h:$0.15 7d:$0.42`) | N/A |
 | Anthropic API key | cost only | N/A |
 | Custom Anthropic-compatible endpoint | cost only | N/A |

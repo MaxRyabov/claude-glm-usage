@@ -20,3 +20,8 @@ tsconfig.webview.json
 *.vsix
 CLAUDE.md
 images/icon.svg
+# Local secrets. .gitignore keeps these out of git, but vsce decides what goes into the
+# package from this file alone — without these lines the z.ai tokens used for manual quota
+# checks would ship inside the public .vsix.
+.env
+.env.*
