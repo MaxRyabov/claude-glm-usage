@@ -464,6 +464,21 @@ suite('z.ai quota — amounts, horizons and hostile input', () => {
     assert.ok(Math.abs(r.utilization5h - 0.20) < 1e-9, `${r.utilization5h}`);
   });
 
+  test('amounts are withheld when the naming looks inverted', () => {
+    // If z.ai ever fixes its backwards usage/currentValue naming, utilization stays right via
+    // the percentage fallback — but the amounts would read "28 000 used of 16 693". Withheld.
+    const inverted = parseZaiQuota(one(
+      { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 16693, currentValue: 28000, percentage: 59, nextResetTime: NOW + H },
+    ), NOW);
+    assert.strictEqual(inverted.credits5h, undefined, 'used above total must not be shown');
+    assert.ok(Math.abs(inverted.utilization5h - 0.59) < 1e-9, 'utilization still falls back to percentage');
+
+    const disagreeing = parseZaiQuota(one(
+      { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 100, currentValue: 90, percentage: 20, nextResetTime: NOW + H },
+    ), NOW);
+    assert.strictEqual(disagreeing.credits5h, undefined, 'amounts disagreeing with percentage are withheld');
+  });
+
   test('amounts without a remaining value still expose used and total', () => {
     const r = parseZaiQuota(one(
       { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 28000, currentValue: 3219, percentage: 11, nextResetTime: NOW + H },

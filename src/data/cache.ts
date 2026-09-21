@@ -8,6 +8,8 @@ import { atomicWriteJson } from './atomicWrite';
 const CACHE_VERSION = 4;
 /** `planLevel` is a free-form string from an external API; bound it before it reaches disk. */
 const MAX_LEVEL_LENGTH = 32;
+/** How far in the future an `updatedAt` may sit before the record counts as corrupt. */
+const MAX_FUTURE_SKEW_MS = 5 * 60_000;
 
 interface CacheFile {
   version: 3 | 4
@@ -63,6 +65,12 @@ function validateAmounts(v: unknown): QuotaAmounts | null | 'invalid' {
   // cache carrying one would render it on the dashboard until the TTL expired.
   if (a.remaining !== undefined &&
       (typeof a.remaining !== 'number' || !isFinite(a.remaining) || a.remaining < 0)) { return 'invalid'; }
+  // Checked as a whole, not just field by field: `used` above `total` (or a remainder above it)
+  // is how an inverted or corrupted record looks, and it would render as "28 000 used of
+  // 16 693". The parser drops amounts like this before they are ever written, so a
+  // self-written record cannot trip this — only a tampered one can.
+  if (a.used > a.total) { return 'invalid'; }
+  if (typeof a.remaining === 'number' && a.remaining > a.total) { return 'invalid'; }
   return a as unknown as QuotaAmounts;
 }
 
@@ -82,6 +90,10 @@ export function validateCacheFile(data: unknown): CacheFile | null {
 
   if (d.version !== 3 && d.version !== CACHE_VERSION) { return null; } // v1/v2 are rejected
   if (typeof d.updatedAt !== 'string' || isNaN(new Date(d.updatedAt).getTime())) { return null; }
+  // A timestamp from the future makes isCacheValid see a negative age, which reads as fresh
+  // forever — the data would never be refreshed again. A few minutes of slack absorbs
+  // ordinary clock skew; a record from further out is corrupt or tampered.
+  if (new Date(d.updatedAt).getTime() > Date.now() + MAX_FUTURE_SKEW_MS) { return null; }
   if (typeof d.providerType !== 'string' || d.providerType.length === 0) { return null; }
 
   const u = d.usageData;
@@ -119,23 +131,7 @@ export async function readCache(): Promise<CacheFile | null> {
   }
 }
 
-/** The reader's range checks, applied before writing so we never persist a rejected record. */
-function isWritableRateLimit(data: RateLimitData): boolean {
-  const inUnitRange = (v: unknown): boolean =>
-    typeof v === 'number' && v >= 0 && v <= 1;
-  const isFiniteSeconds = (v: unknown): boolean =>
-    typeof v === 'number' && isFinite(v) && v >= 0;
-  return inUnitRange(data.utilization5h) && inUnitRange(data.utilization7d)
-    && isFiniteSeconds(data.resetIn5h) && isFiniteSeconds(data.resetIn7d)
-    && ['allowed', 'allowed_warning', 'denied'].includes(data.limitStatus);
-}
-
 export async function writeCache(data: RateLimitData, providerType: string): Promise<void> {
-  // Writing a record our own reader rejects is worse than writing nothing: readCache returns
-  // null, the scheduler reads that as "no cache", and the extension polls the API on every
-  // tick while each poll rewrites the same unreadable file.
-  if (!isWritableRateLimit(data)) { return; }
-
   const nowSec = Date.now() / 1000;
   const usageData: CacheFile['usageData'] = {
     utilization5h: data.utilization5h,
@@ -144,11 +140,11 @@ export async function writeCache(data: RateLimitData, providerType: string): Pro
     reset5hAt: nowSec + data.resetIn5h,
     reset7dAt: nowSec + data.resetIn7d,
     limitStatus: data.limitStatus,
-    has7dLimit: data.has7dLimit,
   };
+  if (typeof data.has7dLimit === 'boolean') { usageData.has7dLimit = data.has7dLimit; }
   // The dashboard is served from cache for most of the TTL, so the amounts have to survive
   // the round-trip or they would flicker between polls.
-  if (data.billing !== undefined) { usageData.billing = data.billing; }
+  if (data.billing === 'credits' || data.billing === 'tokens') { usageData.billing = data.billing; }
   // Apply the same bound the validator enforces. Writing a value our own reader would reject
   // would mean rewriting a file that readCache then discards on every tick — the extension
   // would fall back to calling the API each time, which is the degradation this schema is
@@ -169,6 +165,18 @@ export async function writeCache(data: RateLimitData, providerType: string): Pro
     providerType,
     usageData,
   };
+
+  // The record goes through the reader's own validator before it is written. Writing a
+  // record readCache rejects is worse than writing nothing: readCache returns null, the
+  // scheduler reads that as "no cache", and the extension polls on every tick while each poll
+  // rewrites the same unreadable file.
+  //
+  // One gate instead of a mirrored check per field. Mirroring field by field kept missing a
+  // field — utilization, then planLevel, then the amounts, then billing — because every new
+  // field needed a second copy of its rule. Asking the validator itself cannot drift from it.
+  // Optional fields are still sanitised above, so one bad optional value drops that field
+  // rather than the whole record.
+  if (!validateCacheFile(cache)) { return; }
   try {
     // mode 0600: readable/writable by the owner only — the cache can hold rate-limit
     // state derived from credentials, so other local users must not read it (M-1).

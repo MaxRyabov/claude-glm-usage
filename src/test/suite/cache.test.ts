@@ -276,10 +276,11 @@ suite('Cache write-side guards', () => {
     process.env['CLAUDE_STATUS_CACHE_PATH'] = path.join(dir, 'cache.json');
     try {
       await writeCache({ ...base, ...over } as Parameters<typeof writeCache>[0], 'claude-ai');
-      const raw = fs.readFileSync(getCachePath(), 'utf-8');
-      return validateCacheFile(JSON.parse(raw));
-    } catch {
-      return 'not-written';
+      // Check the contract itself — the file is absent — rather than catching any exception as
+      // "not written". A catch-all passed on unrelated failures too (the temp directory, the
+      // disk), so the test could stay green while proving nothing about the guard.
+      if (!fs.existsSync(getCachePath())) { return 'not-written'; }
+      return validateCacheFile(JSON.parse(fs.readFileSync(getCachePath(), 'utf-8')));
     } finally {
       try {
         if (previous === undefined) { delete process.env['CLAUDE_STATUS_CACHE_PATH']; }
@@ -303,6 +304,54 @@ suite('Cache write-side guards', () => {
     const back = await writeAndRead({});
     assert.notStrictEqual(back, 'not-written', 'a valid record must still be written');
     assert.ok(back, 'and must validate on read');
+  });
+
+  test('an invalid optional field is dropped, not the whole record', async () => {
+    // Sanitised before the gate, so one bad optional value costs that field only — the core
+    // utilization survives rather than the extension losing its cache entirely.
+    const back = await writeAndRead({ billing: 'bitcoin', planLevel: 'x'.repeat(200) }) as
+      { usageData: { billing?: string, planLevel?: string, utilization5h: number } } | 'not-written';
+    assert.notStrictEqual(back, 'not-written', 'the record must still be written');
+    if (back === 'not-written') { return; }
+    assert.strictEqual(back.usageData.billing, undefined);
+    assert.strictEqual(back.usageData.planLevel, undefined);
+    assert.strictEqual(back.usageData.utilization5h, 0.2);
+  });
+
+  test('a record with an empty provider is never written', async () => {
+    const dir = tmp();
+    const previous = process.env['CLAUDE_STATUS_CACHE_PATH'];
+    process.env['CLAUDE_STATUS_CACHE_PATH'] = path.join(dir, 'cache.json');
+    try {
+      await writeCache(base as Parameters<typeof writeCache>[0], '');
+      assert.strictEqual(fs.existsSync(getCachePath()), false, 'the reader rejects an empty provider');
+    } finally {
+      if (previous === undefined) { delete process.env['CLAUDE_STATUS_CACHE_PATH']; }
+      else { process.env['CLAUDE_STATUS_CACHE_PATH'] = previous; }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('amounts where used exceeds total are rejected', () => {
+    const nowSec = Date.now() / 1000;
+    const record = (credits5h: unknown) => ({
+      version: 4, updatedAt: new Date().toISOString(), providerType: 'z-ai',
+      usageData: { ...base, reset5hAt: nowSec + 900, reset7dAt: nowSec + 86400, credits5h },
+    });
+    assert.strictEqual(validateCacheFile(record({ used: 28000, total: 16693 })), null);
+    assert.strictEqual(validateCacheFile(record({ used: 10, total: 100, remaining: 500 })), null);
+    assert.ok(validateCacheFile(record({ used: 16693, total: 28000, remaining: 11306 })));
+  });
+
+  test('a record dated in the future is rejected', () => {
+    // Otherwise isCacheValid sees a negative age and treats the record as fresh forever.
+    const nowSec = Date.now() / 1000;
+    const at = (offsetMs: number) => ({
+      version: 4, updatedAt: new Date(Date.now() + offsetMs).toISOString(), providerType: 'z-ai',
+      usageData: { ...base, reset5hAt: nowSec + 900, reset7dAt: nowSec + 86400 },
+    });
+    assert.strictEqual(validateCacheFile(at(24 * 3_600_000)), null, 'a day ahead is corrupt');
+    assert.ok(validateCacheFile(at(60_000)), 'a minute of clock skew is tolerated');
   });
 
   test('a negative remaining amount is rejected', () => {

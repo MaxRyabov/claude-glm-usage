@@ -474,13 +474,27 @@ function zaiUtilization(entry: ZaiLimitEntry): number {
   return pct === null ? 0 : clamp01(pct / 100);
 }
 
-/** Absolute amounts, when the window reports them. `remaining` may legitimately be missing. */
+/**
+ * Absolute amounts, when the window reports them. `remaining` may legitimately be missing.
+ *
+ * Guarded against z.ai fixing its inverted naming, exactly as `zaiUtilization` is. Without
+ * this the utilization would stay right — it falls back to `percentage` — while the dashboard
+ * printed "28 000 used of 16 693". Amounts that fail the check are withheld rather than shown
+ * wrong; the percentage display is unaffected.
+ */
 function zaiAmounts(entry: ZaiLimitEntry): QuotaAmounts | undefined {
   const used = entry.currentValue;
   const total = entry.usage;
   if (!isFiniteNumber(used) || !isFiniteNumber(total) || total <= 0) { return undefined; }
+  if (used < 0 || used > total) { return undefined; }
+  const pct = entry.percentage;
+  if (isFiniteNumber(pct) && Math.abs((used / total) * 100 - pct) > 1.5) { return undefined; }
+
   const remaining = entry.remaining;
-  return isFiniteNumber(remaining) ? { used, total, remaining } : { used, total };
+  if (isFiniteNumber(remaining) && remaining >= 0 && remaining <= total) {
+    return { used, total, remaining };
+  }
+  return { used, total };
 }
 
 function zaiPlanLevel(json: unknown): string | undefined {

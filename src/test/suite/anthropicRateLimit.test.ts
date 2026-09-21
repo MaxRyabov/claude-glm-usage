@@ -21,8 +21,11 @@ function ownerIsAlive(dirName: string): boolean {
   try {
     process.kill(pid, 0); // signal 0 only probes; it does not terminate anything
     return true;
-  } catch {
-    return false; // no such process, so the directory is genuinely residue
+  } catch (err) {
+    // Only ESRCH means "no such process". EPERM means the opposite — the process exists but we
+    // may not signal it (another user, a sandbox that forbids kill) — and treating it as dead
+    // would delete a live sibling run's fixture.
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
