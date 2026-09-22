@@ -477,8 +477,10 @@ refresh.
 What a failed poll shows is `pollFailureOutcome`; every branch that did not poll by itself
 (skipped, lock held elsewhere, fresh cache under the lock) goes through `noPollOutcome`, so an
 active credential pause keeps showing `auth-rejected`. `showsRateData` decides whether
-utilization is live for the dashboard bars and prediction chart, the prediction, threshold
-notifications and the startup snapshot.
+utilization is live for the dashboard bars and prediction chart, the prediction and the startup
+snapshot. Threshold notifications and window-rollover tracking use the stricter
+`actsOnRateData` ('api' and 'cache' only): a startup snapshot is 'stale' and carries reset times
+as old as the snapshot itself.
 
 `wasJsonlUpdatedRecently(seconds)`: check if any `.jsonl` file under
 `~/.claude/projects/` has an `mtime` within the last `seconds` seconds.

@@ -154,14 +154,14 @@ suite('NotificationDecision', () => {
 suite('rateSignalsFor', () => {
   const usage = { utilization5h: 0.92, utilization7d: 0.5, resetIn5h: 1800, resetIn7d: 86400, has7dLimit: true };
 
-  test('live data passes through unchanged', () => {
-    for (const dataSource of ['api', 'cache', 'stale'] as const) {
+  test('current data passes through unchanged', () => {
+    for (const dataSource of ['api', 'cache'] as const) {
       assert.deepStrictEqual(rateSignalsFor({ ...usage, providerType: 'claude-ai', dataSource }), usage, dataSource);
     }
   });
 
-  test('no live data, no signals: an old 92% behind a refused key raises nothing', () => {
-    for (const dataSource of ['auth-rejected', 'local-only', 'no-data', 'no-credentials'] as const) {
+  test('no current data, no signals: an old 92% behind a refused key or in a snapshot raises nothing', () => {
+    for (const dataSource of ['auth-rejected', 'local-only', 'no-data', 'no-credentials', 'stale'] as const) {
       assert.strictEqual(rateSignalsFor({ ...usage, providerType: 'claude-ai', dataSource }), null, dataSource);
     }
     // The same 92% would notify if it were live — so the null above is what suppresses it.
@@ -196,7 +196,6 @@ suite('windowRolledOver', () => {
     // back 30000 s later with 5000 s left in the new window. Comparing remaining seconds
     // (5000 > 17000 + 3600) missed this; comparing absolute ends does not.
     const end = T0 + 17000;
-    assert.ok(!(5000 > 17000 + 3600), 'the old remaining-time rule misses this case');
     assert.strictEqual(windowRolledOver(end, 5000, T0 + 30000), true);
   });
 

@@ -173,6 +173,19 @@ export function showsRateData(provider: ClaudeProvider, dataSource: DataSource):
 }
 
 /**
+ * Whether the data is current enough to act on: notifications and window-rollover tracking.
+ *
+ * Stricter than `showsRateData`, which also admits 'stale' so the numbers can still be shown.
+ * Acting needs reset times relative to now. The cache recomputes them from absolute timestamps,
+ * but the startup snapshot — also 'stale' — carries the relative values of the moment it was
+ * saved, and rollover tracking would remember a window end inflated by the snapshot's age.
+ * Stale data is unchanged data, so nothing is lost: it was acted on when it was current.
+ */
+export function actsOnRateData(provider: ClaudeProvider, dataSource: DataSource): boolean {
+  return showsRateData(provider, dataSource) && dataSource !== 'stale';
+}
+
+/**
  * The state a startup snapshot is shown in until the first refresh. Only a snapshot that carried
  * live data becomes 'stale'; any other keeps its own state, or its zero utilization would read as
  * "5h: 0% [N ago]" — the very symptom of issue #8.

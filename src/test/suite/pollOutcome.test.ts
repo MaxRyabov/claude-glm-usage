@@ -7,6 +7,7 @@ import {
   supersededByCache,
   activeNotice,
   showsRateData,
+  actsOnRateData,
   snapshotDataSource,
   dashboardUsage,
   pauseSeconds,
@@ -242,6 +243,20 @@ suite('showsRateData and its consumers', () => {
       });
     }
   }
+
+  test('acting needs current data: shown-but-stale is not enough', () => {
+    for (const provider of ['claude-ai', 'z-ai'] as ClaudeProvider[]) {
+      assert.strictEqual(actsOnRateData(provider, 'api'), true, `${provider} api`);
+      assert.strictEqual(actsOnRateData(provider, 'cache'), true, `${provider} cache`);
+      // Shown, but its reset times may be as old as a startup snapshot.
+      assert.strictEqual(showsRateData(provider, 'stale'), true);
+      assert.strictEqual(actsOnRateData(provider, 'stale'), false, `${provider} stale`);
+      for (const ds of ['auth-rejected', 'local-only', 'no-data', 'no-credentials'] as DataSource[]) {
+        assert.strictEqual(actsOnRateData(provider, ds), false, `${provider} ${ds}`);
+      }
+    }
+    assert.strictEqual(actsOnRateData('aws-bedrock', 'api'), false);
+  });
 
   test('a snapshot becomes stale only if it carried live data', () => {
     assert.strictEqual(snapshotDataSource({ providerType: 'claude-ai', dataSource: 'api' }), 'stale');

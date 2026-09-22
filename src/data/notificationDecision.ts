@@ -9,7 +9,7 @@
 // without the Electron host — see prediction.ts / statusBar.ts for the same pattern.
 
 import type { ClaudeProvider } from './apiClient';
-import { DataSource, showsRateData } from './pollOutcome';
+import { DataSource, actsOnRateData } from './pollOutcome';
 
 export type NotifySeverity = 'warning' | 'error';
 
@@ -50,16 +50,18 @@ export function windowRolledOver(prevEndAt: number | null, resetIn: number, nowS
 }
 
 /**
- * The utilization and reset times notifications may act on, or null when they are not live.
+ * The utilization and reset times notifications may act on, or null when they are not current.
  *
  * Without live data (a refused key, cost-only mode) the numbers are an old cache or zeros.
+ * 'stale' is excluded too: the startup snapshot's reset times are as old as the snapshot (see
+ * actsOnRateData).
  * Acting on them raised "92% used" for a window nobody could see, and a switch from zeros back
  * to real reset times looked like a window rollover, re-arming notifications already shown.
  */
 export function rateSignalsFor(
   data: RateLimitUsage & { providerType: ClaudeProvider; dataSource: DataSource },
 ): RateLimitUsage | null {
-  if (!showsRateData(data.providerType, data.dataSource)) { return null; }
+  if (!actsOnRateData(data.providerType, data.dataSource)) { return null; }
   const { utilization5h, utilization7d, resetIn5h, resetIn7d, has7dLimit } = data;
   return { utilization5h, utilization7d, resetIn5h, resetIn7d, has7dLimit };
 }
