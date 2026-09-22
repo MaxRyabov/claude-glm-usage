@@ -35,6 +35,21 @@ export interface RateLimitThresholds {
 }
 
 /**
+ * Whether a quota window has rolled over since the previous live observation.
+ *
+ * Compares absolute window ends (epoch seconds), not the remaining seconds: notifications only
+ * act on live data, so observations can be hours apart. With remaining seconds, a gap that
+ * spans a rollover and ends deep into the next window leaves the new remainder below the old
+ * one, the rollover goes unseen, and the new window never re-arms its warnings. An absolute
+ * end stays constant within a window and jumps by a whole window at a rollover, however long
+ * the gap. The first observation has nothing to compare with and is not a rollover.
+ */
+export function windowRolledOver(prevEndAt: number | null, resetIn: number, nowSec: number): boolean {
+  if (prevEndAt === null) { return false; }
+  return nowSec + resetIn > prevEndAt + 3600;
+}
+
+/**
  * The utilization and reset times notifications may act on, or null when they are not live.
  *
  * Without live data (a refused key, cost-only mode) the numbers are an old cache or zeros.

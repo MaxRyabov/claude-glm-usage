@@ -113,17 +113,52 @@ suite('localization key parity', () => {
 // shipped sources. The key parity above only compares bundles with each other; nothing checked
 // that the code asks for a key that exists, so a one-character drift between the call and the
 // bundle silently fell back to English for every non-English user.
+//
+// Every shipped source is scanned, not a fixed list: a new file calling l10n.t would otherwise
+// drop out of the check while it kept passing. A call whose first argument is not a plain
+// string literal cannot be checked, so it fails loudly instead of being skipped.
+function shippedSources(): string[] {
+  return (fs.readdirSync(path.join(ROOT, 'src'), { recursive: true }) as string[])
+    .map((f) => path.join('src', f).split(path.sep).join('/'))
+    .filter((f) => f.endsWith('.ts') && !f.startsWith('src/test/'))
+    .sort();
+}
+
+const SIMPLE_ESCAPES: Record<string, string> = {
+  n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', '0': '\0', '\n': '', '\r': '',
+};
+
+/** The value of a JS string literal body, with every escape resolved as JS resolves it. */
+function unescapeLiteral(body: string): string {
+  return body.replace(/\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, (_all, esc: string) => {
+    if (esc.length > 1) { return String.fromCodePoint(parseInt(esc.replace(/[ux{}]/g, ''), 16)); }
+    return SIMPLE_ESCAPES[esc] ?? esc;
+  });
+}
+
 function runtimeL10nKeys(): { file: string; key: string }[] {
-  const files = ['src/statusBar.ts', 'src/extension.ts', 'src/webview/panel.ts'];
-  const call = /(?:l10n\.t|\bt)\(\s*'((?:[^'\\]|\\.)*)'/g;
+  // `l10n.t(` anywhere, or a bare `t(` alias (the panel binds one); not `x.t(` or `foo_t(`.
+  const call = /(?:\bl10n\.t|(?<![.\w$])t)\(\s*/g;
   const out: { file: string; key: string }[] = [];
-  for (const file of files) {
+  const unreadable: string[] = [];
+  for (const file of shippedSources()) {
     const src = fs.readFileSync(path.join(ROOT, file), 'utf-8');
     for (const m of src.matchAll(call)) {
-      const key = m[1].replace(/\\(.)/g, (_all, ch: string) => (ch === 'n' ? '\n' : ch));
-      out.push({ file, key });
+      const start = m.index + m[0].length;
+      const quote = src[start];
+      const literal = quote === "'" || quote === '"'
+        ? new RegExp(`${quote}((?:[^${quote}\\\\\\n]|\\\\[\\s\\S])*)${quote}`, 'y')
+        : null;
+      if (literal) { literal.lastIndex = start; }
+      const lm = literal?.exec(src);
+      if (!lm) {
+        unreadable.push(`${file}:${src.slice(0, m.index).split('\n').length}`);
+        continue;
+      }
+      out.push({ file, key: unescapeLiteral(lm[1]) });
     }
   }
+  assert.deepStrictEqual(unreadable, [], 'l10n calls whose key is not a plain string literal cannot be checked');
   return out;
 }
 
@@ -156,13 +191,16 @@ suite('runtime strings reach the bundles', () => {
   test('the rejected-login hint names the refresh command as the palette does', () => {
     const hint = 'Anthropic rejected your Claude Code login.\nRun: claude auth login, then "Claude+GLM: Refresh Now"';
     assert.ok(runtimeL10nKeys().some((k) => k.key === hint), 'the hint must be used in code');
-    const refreshTitle = (file: string): string =>
+    const refreshTitle = (file: string): string | undefined =>
       (JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf-8')) as Record<string, string>)['cmd.refresh'];
-    assert.ok(hint.includes(refreshTitle('package.nls.json')), 'English hint vs package.nls.json');
+    const enTitle = refreshTitle('package.nls.json');
+    assert.ok(enTitle, 'package.nls.json has cmd.refresh');
+    assert.ok(hint.includes(enTitle), 'English hint vs package.nls.json');
     for (const lang of BUNDLE_LOCALES) {
-      const translated = Object.fromEntries(readEntries(`l10n/bundle.l10n.${lang}.json`))[hint];
+      const translated = Object.fromEntries(readEntries(`l10n/bundle.l10n.${lang}.json`))[hint] as string | undefined;
       const title = refreshTitle(`package.nls.${lang}.json`);
       assert.ok(title, `package.nls.${lang}.json has cmd.refresh`);
+      assert.ok(translated !== undefined, `bundle.l10n.${lang}.json lacks the key ${JSON.stringify(hint)}`);
       assert.ok(translated.includes(title), `${lang}: ${JSON.stringify(translated)} must contain ${JSON.stringify(title)}`);
     }
   });

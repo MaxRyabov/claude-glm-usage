@@ -2,14 +2,20 @@ import * as vscode from 'vscode';
 import { DataManager, ClaudeUsageData, PredictionData } from './data/dataManager';
 import { StatusBarManager, formatDuration } from './statusBar';
 import { config } from './config';
-import { decideRateLimitNotifications, rateSignalsFor, RateLimitNotification } from './data/notificationDecision';
+import {
+  decideRateLimitNotifications,
+  rateSignalsFor,
+  windowRolledOver,
+  RateLimitNotification,
+} from './data/notificationDecision';
 
 // --- Notification system ---
 // Deduplication: bucket keys (e.g. '5h-92', '7d-85') are cleared per window when that
 // window resets, so each step re-arms exactly once per fresh window.
 const notifiedKeys = new Set<string>();
-let prevResetIn5h = 0;
-let prevResetIn7d = 0;
+// Absolute ends (epoch seconds) of the windows at the last live observation.
+let prevWindowEnd5h: number | null = null;
+let prevWindowEnd7d: number | null = null;
 
 /** Drop all dedup keys for a window (prefix '5h-' / '7d-'). */
 function clearWindowKeys(prefix: string): void {
@@ -19,16 +25,18 @@ function clearWindowKeys(prefix: string): void {
 }
 
 function checkWindowResets(resetIn5h: number, resetIn7d: number): void {
-  // If resetIn increased by more than 1 hour, that window has rolled over.
-  if (resetIn5h > prevResetIn5h + 3600) {
+  // A window whose absolute end moved forward by more than an hour has rolled over — see
+  // windowRolledOver for why the end, not the remaining time, is compared.
+  const nowSec = Date.now() / 1000;
+  if (windowRolledOver(prevWindowEnd5h, resetIn5h, nowSec)) {
     clearWindowKeys('5h-');
     notifiedKeys.delete('budget'); // re-arm the daily budget alert on each 5h rollover (prior behavior)
   }
-  if (resetIn7d > prevResetIn7d + 3600) {
+  if (windowRolledOver(prevWindowEnd7d, resetIn7d, nowSec)) {
     clearWindowKeys('7d-');
   }
-  prevResetIn5h = resetIn5h;
-  prevResetIn7d = resetIn7d;
+  prevWindowEnd5h = nowSec + resetIn5h;
+  prevWindowEnd7d = nowSec + resetIn7d;
 }
 
 async function showRateLimitNotification(n: RateLimitNotification): Promise<void> {

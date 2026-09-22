@@ -101,13 +101,15 @@ suite('EntryCache discovery', () => {
     const old = new Date(Date.now() - 2 * 3600 * 1000);
     await fs.utimes(a, old, old);
 
+    // Compare full paths, not name endings: the walk covers the real ~/.claude/projects, where
+    // any live session whose UUID ends in 'a' also ends with 'a.jsonl'.
     const all = await discoverFiles();
-    assert.ok(all.some((p) => p.endsWith('a.jsonl')), 'unfiltered discovery includes a.jsonl');
-    assert.ok(all.some((p) => p.endsWith('b.jsonl')), 'unfiltered discovery includes b.jsonl');
+    assert.ok(all.some((p) => path.resolve(p) === path.resolve(a)), 'unfiltered discovery includes a.jsonl');
+    assert.ok(all.some((p) => path.resolve(p) === path.resolve(b)), 'unfiltered discovery includes b.jsonl');
 
     // Second call reuses the cached walk and stat-filters to the last 30 minutes.
     const recent = await discoverFiles(Date.now() - 30 * 60 * 1000);
-    assert.ok(recent.some((p) => p.endsWith('b.jsonl')), 'recent window keeps b.jsonl');
-    assert.ok(!recent.some((p) => p.endsWith('a.jsonl')), 'recent window drops the 2h-old a.jsonl');
+    assert.ok(recent.some((p) => path.resolve(p) === path.resolve(b)), 'recent window keeps b.jsonl');
+    assert.ok(!recent.some((p) => path.resolve(p) === path.resolve(a)), 'recent window drops the 2h-old a.jsonl');
   });
 });

@@ -43,28 +43,47 @@ suite('pollFailureOutcome', () => {
     { name: 'thrown string', err: 'boom' },
   ];
 
-  // The full table, written out rather than re-derived, so the test states the design (A6)
-  // instead of mirroring the implementation.
-  function expected(name: string, hasCache: boolean, cacheValid: boolean, hasCostData: boolean): DataSource {
-    const cached: DataSource | null = hasCache ? (cacheValid ? 'cache' : 'stale') : null;
-    switch (name) {
-      case 'Anthropic 401': case 'Anthropic 403': case 'z.ai refusal':
-        return 'auth-rejected';
-      case 'no credentials':
-        return cached ?? (hasCostData ? 'local-only' : 'no-credentials');
-      default:
-        return cached ?? (hasCostData ? 'local-only' : 'no-data');
-    }
-  }
+  // The design's table (A6) as literals, one column per cache × cost combination. Nothing here
+  // is computed, so a mistake shared by the implementation and a helper cannot hide.
+  type Column = 'fresh+cost' | 'fresh' | 'expired+cost' | 'expired' | 'none+cost' | 'none';
+  const EXPECTED: Record<'refusal' | 'unavailable' | 'other', Record<Column, DataSource>> = {
+    refusal: {
+      'fresh+cost': 'auth-rejected', 'fresh': 'auth-rejected',
+      'expired+cost': 'auth-rejected', 'expired': 'auth-rejected',
+      'none+cost': 'auth-rejected', 'none': 'auth-rejected',
+    },
+    unavailable: {
+      'fresh+cost': 'cache', 'fresh': 'cache',
+      'expired+cost': 'stale', 'expired': 'stale',
+      'none+cost': 'local-only', 'none': 'no-credentials',
+    },
+    other: {
+      'fresh+cost': 'cache', 'fresh': 'cache',
+      'expired+cost': 'stale', 'expired': 'stale',
+      'none+cost': 'local-only', 'none': 'no-data',
+    },
+  };
+  const ROW: Record<string, keyof typeof EXPECTED> = {
+    'Anthropic 401': 'refusal', 'Anthropic 403': 'refusal', 'z.ai refusal': 'refusal',
+    'no credentials': 'unavailable',
+    'Anthropic format': 'other', 'z.ai format': 'other', 'expired token': 'other',
+    '5xx': 'other', 'thrown string': 'other',
+  };
+  const COLUMNS: { column: Column; hasCache: boolean; cacheValid: boolean; hasCostData: boolean }[] = [
+    { column: 'fresh+cost', hasCache: true, cacheValid: true, hasCostData: true },
+    { column: 'fresh', hasCache: true, cacheValid: true, hasCostData: false },
+    { column: 'expired+cost', hasCache: true, cacheValid: false, hasCostData: true },
+    { column: 'expired', hasCache: true, cacheValid: false, hasCostData: false },
+    { column: 'none+cost', hasCache: false, cacheValid: false, hasCostData: true },
+    { column: 'none', hasCache: false, cacheValid: false, hasCostData: false },
+  ];
 
   for (const r of REASONS) {
-    for (const c of CACHE_CASES) {
-      for (const hasCostData of [true, false]) {
-        test(`${r.name}, ${c.name}, ${hasCostData ? 'with' : 'without'} cost`, () => {
-          const out = pollFailureOutcome(r.err, { ...c, hasCostData });
-          assert.strictEqual(out.dataSource, expected(r.name, c.hasCache, c.cacheValid, hasCostData));
-        });
-      }
+    for (const c of COLUMNS) {
+      test(`${r.name}, ${c.column}`, () => {
+        const { column, ...ctx } = c;
+        assert.strictEqual(pollFailureOutcome(r.err, ctx).dataSource, EXPECTED[ROW[r.name]][column]);
+      });
     }
   }
 
@@ -132,7 +151,8 @@ suite('pollDecision', () => {
       const justFailed = { ...base, cache, retryableFailureAt: NOW - (RETRY_DELAY_SECONDS * 1000 - 1) };
       assert.strictEqual(pollDecision(justFailed), 'skip', `${cache}: inside the delay`);
       const later = { ...base, cache, retryableFailureAt: NOW - RETRY_DELAY_SECONDS * 1000 };
-      assert.notStrictEqual(pollDecision(later), 'skip', `${cache}: after the delay`);
+      assert.strictEqual(pollDecision(later), cache === 'none' ? 'poll' : 'poll-if-jsonl-recent',
+        `${cache}: after the delay`);
     }
   });
 
