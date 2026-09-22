@@ -148,6 +148,9 @@ suite('pollDecision', () => {
   });
 
   test('a retryable failure waits five minutes, with or without a cache', () => {
+    // Pin the length itself: the offsets below derive from the constant, so without this a
+    // change to 30 s would still pass under a test named "five minutes".
+    assert.strictEqual(RETRY_DELAY_SECONDS, 300);
     for (const cache of ['none', 'expired'] as const) {
       const justFailed = { ...base, cache, retryableFailureAt: NOW - (RETRY_DELAY_SECONDS * 1000 - 1) };
       assert.strictEqual(pollDecision(justFailed), 'skip', `${cache}: inside the delay`);
@@ -222,7 +225,9 @@ suite('failure superseded by another window', () => {
     assert.strictEqual(supersededByCache(undefined, FAILED_AT), false);
     assert.strictEqual(supersededByCache('not a date', FAILED_AT), false);
   });
+});
 
+suite('activeNotice', () => {
   test('a notice belongs to the provider it was recorded for', () => {
     const stored = { provider: 'claude-ai' as ClaudeProvider, notice: 'token-expired' as const };
     assert.strictEqual(activeNotice(stored, 'claude-ai'), 'token-expired');
@@ -235,7 +240,8 @@ suite('showsRateData and its consumers', () => {
   const SOURCES: DataSource[] = ['api', 'cache', 'stale', 'no-credentials', 'no-data', 'local-only', 'auth-rejected'];
   const LIVE = new Set<DataSource>(['api', 'cache', 'stale']);
 
-  for (const provider of ['claude-ai', 'z-ai', 'aws-bedrock', 'unknown'] as ClaudeProvider[]) {
+  const PROVIDERS: ClaudeProvider[] = ['claude-ai', 'z-ai', 'aws-bedrock', 'api-key', 'custom-endpoint', 'unknown'];
+  for (const provider of PROVIDERS) {
     for (const ds of SOURCES) {
       test(`${provider} / ${ds}`, () => {
         const want = (provider === 'claude-ai' || provider === 'z-ai') && LIVE.has(ds);
@@ -255,7 +261,10 @@ suite('showsRateData and its consumers', () => {
         assert.strictEqual(actsOnRateData(provider, ds), false, `${provider} ${ds}`);
       }
     }
-    assert.strictEqual(actsOnRateData('aws-bedrock', 'api'), false);
+    for (const provider of ['aws-bedrock', 'api-key', 'custom-endpoint', 'unknown'] as ClaudeProvider[]) {
+      assert.strictEqual(actsOnRateData(provider, 'api'), false, provider);
+      assert.strictEqual(actsOnRateData(provider, 'cache'), false, provider);
+    }
   });
 
   test('a snapshot becomes stale only if it carried live data', () => {
@@ -265,7 +274,9 @@ suite('showsRateData and its consumers', () => {
       assert.strictEqual(snapshotDataSource({ providerType: 'claude-ai', dataSource: ds }), ds);
     }
     // A cost-only provider's snapshot never had rate data, whatever it was labelled.
-    assert.strictEqual(snapshotDataSource({ providerType: 'aws-bedrock', dataSource: 'local-only' }), 'local-only');
+    for (const ds of ['local-only', 'api', 'cache'] as DataSource[]) {
+      assert.strictEqual(snapshotDataSource({ providerType: 'aws-bedrock', dataSource: ds }), ds, `aws-bedrock ${ds}`);
+    }
   });
 
   test('the dashboard payload carries the same decision', () => {

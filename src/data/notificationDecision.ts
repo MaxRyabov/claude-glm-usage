@@ -35,6 +35,18 @@ export interface RateLimitThresholds {
 }
 
 /**
+ * How far the observed window end may move forward without counting as a rollover.
+ *
+ * The end is estimated as `now + resetIn`, and that estimate wobbles between polls: reset
+ * headers are whole seconds, a cached reset is read against a later clock, and a window that
+ * already ended reports resetIn 0, so its estimate creeps forward with the clock. A rollover
+ * moves the end by a whole window — five hours at the least — so an hour sits far above the
+ * wobble and far below the jump. Zero would turn every wobble into a rollover and re-arm
+ * warnings already shown.
+ */
+const ROLLOVER_TOLERANCE_SEC = 3600;
+
+/**
  * Whether a quota window has rolled over since the previous live observation.
  *
  * Compares absolute window ends (epoch seconds), not the remaining seconds: notifications only
@@ -42,11 +54,12 @@ export interface RateLimitThresholds {
  * spans a rollover and ends deep into the next window leaves the new remainder below the old
  * one, the rollover goes unseen, and the new window never re-arms its warnings. An absolute
  * end stays constant within a window and jumps by a whole window at a rollover, however long
- * the gap. The first observation has nothing to compare with and is not a rollover.
+ * the gap. The first observation has nothing to compare with and is not a rollover. The end must
+ * move by more than ROLLOVER_TOLERANCE_SEC to count.
  */
 export function windowRolledOver(prevEndAt: number | null, resetIn: number, nowSec: number): boolean {
   if (prevEndAt === null) { return false; }
-  return nowSec + resetIn > prevEndAt + 3600;
+  return nowSec + resetIn > prevEndAt + ROLLOVER_TOLERANCE_SEC;
 }
 
 /**
