@@ -108,3 +108,62 @@ suite('localization key parity', () => {
     }
   });
 });
+
+// Collect every string literal passed to vscode.l10n.t (or the panel's `t` alias) in the
+// shipped sources. The key parity above only compares bundles with each other; nothing checked
+// that the code asks for a key that exists, so a one-character drift between the call and the
+// bundle silently fell back to English for every non-English user.
+function runtimeL10nKeys(): { file: string; key: string }[] {
+  const files = ['src/statusBar.ts', 'src/extension.ts', 'src/webview/panel.ts'];
+  const call = /(?:l10n\.t|\bt)\(\s*'((?:[^'\\]|\\.)*)'/g;
+  const out: { file: string; key: string }[] = [];
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf-8');
+    for (const m of src.matchAll(call)) {
+      const key = m[1].replace(/\\(.)/g, (_all, ch: string) => (ch === 'n' ? '\n' : ch));
+      out.push({ file, key });
+    }
+  }
+  return out;
+}
+
+suite('runtime strings reach the bundles', () => {
+  test('every l10n.t literal in the sources is a key of each bundle', () => {
+    const keys = runtimeL10nKeys();
+    // Positive control: the scanner must see the strings this suite exists for.
+    assert.ok(keys.some((k) => k.key === 'Claude Code is not logged in.\nRun: claude auth login'),
+      'the scanner must find the not-logged-in hint, real newline included');
+    assert.ok(keys.length > 50, `suspiciously few literals found: ${keys.length}`);
+    for (const lang of BUNDLE_LOCALES) {
+      const bundle = new Set(readKeys(`l10n/bundle.l10n.${lang}.json`));
+      const missing = keys.filter((k) => !bundle.has(k.key));
+      assert.deepStrictEqual(missing, [], `${lang} bundle lacks keys used in code`);
+    }
+  });
+
+  test('no hint suggests the non-existent `claude login` command', () => {
+    const bare = /claude login/;
+    for (const k of runtimeL10nKeys()) {
+      assert.ok(!bare.test(k.key), `${k.file}: ${JSON.stringify(k.key)}`);
+    }
+    for (const lang of BUNDLE_LOCALES) {
+      for (const [key, value] of readEntries(`l10n/bundle.l10n.${lang}.json`)) {
+        assert.ok(!bare.test(value), `${lang}: ${JSON.stringify(key)}`);
+      }
+    }
+  });
+
+  test('the rejected-login hint names the refresh command as the palette does', () => {
+    const hint = 'Anthropic rejected your Claude Code login.\nRun: claude auth login, then "Claude+GLM: Refresh Now"';
+    assert.ok(runtimeL10nKeys().some((k) => k.key === hint), 'the hint must be used in code');
+    const refreshTitle = (file: string): string =>
+      (JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf-8')) as Record<string, string>)['cmd.refresh'];
+    assert.ok(hint.includes(refreshTitle('package.nls.json')), 'English hint vs package.nls.json');
+    for (const lang of BUNDLE_LOCALES) {
+      const translated = Object.fromEntries(readEntries(`l10n/bundle.l10n.${lang}.json`))[hint];
+      const title = refreshTitle(`package.nls.${lang}.json`);
+      assert.ok(title, `package.nls.${lang}.json has cmd.refresh`);
+      assert.ok(translated.includes(title), `${lang}: ${JSON.stringify(translated)} must contain ${JSON.stringify(title)}`);
+    }
+  });
+});

@@ -8,6 +8,9 @@
 // The function is deliberately free of any `vscode` import so it can be unit-tested
 // without the Electron host — see prediction.ts / statusBar.ts for the same pattern.
 
+import type { ClaudeProvider } from './apiClient';
+import { DataSource, showsRateData } from './pollOutcome';
+
 export type NotifySeverity = 'warning' | 'error';
 
 export interface RateLimitNotification {
@@ -29,6 +32,21 @@ export interface RateLimitThresholds {
   sevenDayStartPercent: number;  // default 80
   sevenDayEndPercent: number;    // default 90
   sevenDayStepPercent: number;   // default 5
+}
+
+/**
+ * The utilization and reset times notifications may act on, or null when they are not live.
+ *
+ * Without live data (a refused key, cost-only mode) the numbers are an old cache or zeros.
+ * Acting on them raised "92% used" for a window nobody could see, and a switch from zeros back
+ * to real reset times looked like a window rollover, re-arming notifications already shown.
+ */
+export function rateSignalsFor(
+  data: RateLimitUsage & { providerType: ClaudeProvider; dataSource: DataSource },
+): RateLimitUsage | null {
+  if (!showsRateData(data.providerType, data.dataSource)) { return null; }
+  const { utilization5h, utilization7d, resetIn5h, resetIn7d, has7dLimit } = data;
+  return { utilization5h, utilization7d, resetIn5h, resetIn7d, has7dLimit };
 }
 
 export interface RateLimitUsage {

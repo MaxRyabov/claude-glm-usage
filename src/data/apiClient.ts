@@ -3,8 +3,34 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { CredentialRejectedError, QuotaFormatError } from './authBackoff';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * No credential to send: no credentials file, no token in it, nothing in the Keychain, or a
+ * configured path outside ~/.claude. This — and only this — is what "not logged in" means.
+ * Before it existed every failure without a cache read as "not logged in", so an Anthropic
+ * outage told the user to log in again.
+ */
+export class CredentialsUnavailableError extends Error {}
+
+/**
+ * The OAuth token on disk has expired. Claude Code refreshes it on its next request, so this is
+ * the normal state of a machine where Claude Code has not run for a while — not a refusal. No
+ * request is sent: its outcome (401) is known in advance.
+ */
+export class AnthropicTokenExpiredError extends Error {}
+
+/** Anthropic answered 401 or 403. The status is kept because only 401 is about logging in. */
+export class AnthropicAuthError extends CredentialRejectedError {
+  constructor(readonly status: 401 | 403) {
+    super(`Anthropic rejected the OAuth token (HTTP ${status})`);
+  }
+}
+
+/** Anthropic answered without any of the rate-limit headers the parser reads. */
+export class AnthropicFormatError extends QuotaFormatError {}
 
 // Actual structure of ~/.claude/.credentials.json (verified against Claude Code v2.1.x)
 // macOS stores these in Keychain under service "Claude Code-credentials" with the same JSON format.
@@ -134,19 +160,39 @@ export async function detectProvider(customCredPath?: string | null): Promise<Cl
 // instead of (or in addition to) ~/.claude/.credentials.json.
 const MACOS_KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
-async function readCredentialsFromKeychain(): Promise<string> {
-  // Use execFile with an argument array (no shell) so the service name cannot be
-  // interpreted as shell syntax — eliminates the command-injection vector (C-2).
-  const { stdout } = await execFileAsync(
-    '/usr/bin/security',
-    ['find-generic-password', '-s', MACOS_KEYCHAIN_SERVICE, '-w']
-  );
-  const creds = JSON.parse(stdout.trim()) as ClaudeCredentials;
-  const token = creds.claudeAiOauth?.accessToken;
-  if (!token) {
-    throw new Error('No OAuth access token in macOS Keychain');
+/** A token together with the expiry Claude Code stored next to it (epoch ms, when present). */
+export interface OAuthCredentials {
+  token: string
+  expiresAt: unknown
+}
+
+function credentialsFromJson(creds: ClaudeCredentials): OAuthCredentials | null {
+  const token = creds?.claudeAiOauth?.accessToken;
+  return token ? { token, expiresAt: creds.claudeAiOauth.expiresAt } : null;
+}
+
+async function readCredentialsFromKeychain(): Promise<OAuthCredentials> {
+  let stdout: string;
+  try {
+    // Use execFile with an argument array (no shell) so the service name cannot be
+    // interpreted as shell syntax — eliminates the command-injection vector (C-2).
+    ({ stdout } = await execFileAsync(
+      '/usr/bin/security',
+      ['find-generic-password', '-s', MACOS_KEYCHAIN_SERVICE, '-w']
+    ));
+  } catch {
+    throw new CredentialsUnavailableError('No Claude.ai credentials in macOS Keychain');
   }
-  return token;
+  let parsed: OAuthCredentials | null;
+  try {
+    parsed = credentialsFromJson(JSON.parse(stdout.trim()) as ClaudeCredentials);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed) {
+    throw new CredentialsUnavailableError('No OAuth access token in macOS Keychain');
+  }
+  return parsed;
 }
 
 /**
@@ -163,36 +209,136 @@ export function validateCredentialsPath(p: string): string {
   return resolved;
 }
 
-async function readCredentials(customPath?: string | null): Promise<string> {
+async function readCredentials(
+  customPath?: string | null,
+): Promise<OAuthCredentials & { source: 'file' | 'keychain' }> {
   const rawPath = customPath ?? path.join(os.homedir(), '.claude', '.credentials.json');
-  const credPath = validateCredentialsPath(rawPath);
+  let credPath: string;
   try {
-    const content = await fs.readFile(credPath, 'utf-8');
-    const creds = JSON.parse(content) as ClaudeCredentials;
-    const token = creds.claudeAiOauth?.accessToken;
-    if (!token) {
-      throw new Error('No OAuth access token found in credentials file');
-    }
-    return token;
-  } catch {
-    // On macOS with no credentials file, fall back to Keychain (Claude Code v2.x+)
-    if (process.platform === 'darwin' && (customPath === null || customPath === undefined)) {
-      return readCredentialsFromKeychain();
-    }
-    throw new Error('No Claude.ai credentials found');
+    credPath = validateCredentialsPath(rawPath);
+  } catch (err) {
+    // A configured path outside ~/.claude cannot be read at all, which for the user is the same
+    // as having no credentials — the message still names the path so the cause is findable.
+    throw new CredentialsUnavailableError((err as Error).message);
   }
+  let content: string | null = null;
+  try {
+    content = await fs.readFile(credPath, 'utf-8');
+  } catch {
+    // no file — handled below
+  }
+  if (content !== null) {
+    let parsed: OAuthCredentials | null = null;
+    let malformed = false;
+    try {
+      parsed = credentialsFromJson(JSON.parse(content) as ClaudeCredentials);
+    } catch {
+      malformed = true;
+    }
+    if (parsed) { return { ...parsed, source: 'file' }; }
+    // A file that does not parse is most likely being rewritten by Claude Code right now. It is
+    // worth another look shortly, so it must not surface as "not logged in".
+    if (malformed && !(process.platform === 'darwin' && (customPath === null || customPath === undefined))) {
+      throw new Error('Claude.ai credentials file is not valid JSON');
+    }
+  }
+  // On macOS with no usable credentials file, fall back to Keychain (Claude Code v2.x+)
+  if (process.platform === 'darwin' && (customPath === null || customPath === undefined)) {
+    return { ...(await readCredentialsFromKeychain()), source: 'keychain' };
+  }
+  throw new CredentialsUnavailableError('No Claude.ai credentials found');
+}
+
+/** Claude Code refreshes tokens well before this; the margin covers a token expiring in flight. */
+const TOKEN_EXPIRY_MARGIN_MS = 60_000;
+const ONE_YEAR_MS = 365 * 24 * 3600 * 1000;
+
+/**
+ * The stored expiry as epoch milliseconds, or null when it is absent or not believable.
+ *
+ * The plausibility check matters more than it looks: were the file format ever to switch to
+ * seconds, every token would read as expired in 1970, and polling would stop for good with
+ * nothing in the interface saying why. Unknown expiry keeps the old behaviour — send the request.
+ */
+export function plausibleExpiry(expiresAt: unknown, now: number = Date.now()): number | null {
+  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) { return null; }
+  if (expiresAt < 1e12 || expiresAt > now + ONE_YEAR_MS) { return null; }
+  return expiresAt;
+}
+
+export function isTokenExpired(expiresAt: unknown, now: number = Date.now()): boolean {
+  const at = plausibleExpiry(expiresAt, now);
+  return at !== null && at <= now + TOKEN_EXPIRY_MARGIN_MS;
+}
+
+/**
+ * Pick the credential to send when the file's token has expired.
+ *
+ * On macOS Claude Code v2.x keeps its live token in the Keychain, but an old credentials file
+ * may still be lying around — and the reader only falls back to the Keychain when the file is
+ * unreadable. Without this a stale file would pin the extension to "token expired" forever
+ * while Claude Code runs happily on the Keychain token.
+ *
+ * Called from the poll path only, never from provider detection: detection runs on every
+ * refresh of every window, and reading the Keychain there would spawn `security` each minute.
+ */
+export async function pickFreshestCredentials(
+  file: OAuthCredentials & { source: 'file' | 'keychain' },
+  readKeychain: () => Promise<OAuthCredentials>,
+  opts: { platform: NodeJS.Platform; isDefaultPath: boolean; now?: number },
+): Promise<OAuthCredentials> {
+  const now = opts.now ?? Date.now();
+  if (file.source !== 'file' || !isTokenExpired(file.expiresAt, now)) { return file; }
+  if (opts.platform !== 'darwin' || !opts.isDefaultPath) { return file; }
+  let keychain: OAuthCredentials;
+  try {
+    keychain = await readKeychain();
+  } catch {
+    return file;
+  }
+  const fileAt = plausibleExpiry(file.expiresAt, now) ?? 0;
+  const keychainAt = plausibleExpiry(keychain.expiresAt, now);
+  // A Keychain entry with no believable expiry is still a better bet than a file we know expired.
+  return keychainAt === null || keychainAt > fileAt ? keychain : file;
+}
+
+/** The rate-limit headers the parser reads. A response with none of them carries no data. */
+const ANTHROPIC_RATE_LIMIT_HEADERS = [
+  'anthropic-ratelimit-unified-5h-utilization',
+  'anthropic-ratelimit-unified-7d-utilization',
+  'anthropic-ratelimit-unified-5h-reset',
+  'anthropic-ratelimit-unified-7d-reset',
+  'anthropic-ratelimit-unified-5h-status',
+];
+
+/**
+ * The body is never read, but it must still be released: undici keeps the connection until an
+ * unread body is garbage-collected. A failed cancel is not worth failing the poll over.
+ */
+function discardBody(response: Response): void {
+  try {
+    const pending = response.body?.cancel();
+    if (pending) { pending.catch(() => { /* ignore */ }); }
+  } catch { /* ignore */ }
 }
 
 export async function fetchRateLimitData(
   customCredPath?: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<RateLimitData> {
-  const token = await readCredentials(customCredPath);
+  const stored = await readCredentials(customCredPath);
+  const creds = await pickFreshestCredentials(stored, readCredentialsFromKeychain, {
+    platform: process.platform,
+    isDefaultPath: customCredPath === null || customCredPath === undefined,
+  });
+  if (isTokenExpired(creds.expiresAt)) {
+    throw new AnthropicTokenExpiredError('Claude Code login token expired');
+  }
 
   const response = await fetchImpl('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`,
+      'Authorization': `Bearer ${creds.token}`,
       'anthropic-version': '2023-06-01',
       'anthropic-beta': 'oauth-2025-04-20',
       'content-type': 'application/json',
@@ -203,6 +349,23 @@ export async function fetchRateLimitData(
       messages: [{ role: 'user', content: '.' }],
     }),
   });
+  discardBody(response);
+
+  // Status before headers: a refusal means the numbers cannot be trusted even if some arrived.
+  // Messages carry the status only — never the token, never the body.
+  const status = response.status;
+  if (status === 401 || status === 403) {
+    throw new AnthropicAuthError(status);
+  }
+  if (status >= 500) {
+    throw new Error(`Anthropic API unavailable (HTTP ${status})`);
+  }
+  // Without this check every header read below returns null and the defaults assemble a
+  // confident "0% used, allowed", which then sat in the cache as live data for a whole TTL.
+  // A 429 still carries the headers (with a denied status), so it passes through untouched.
+  if (!ANTHROPIC_RATE_LIMIT_HEADERS.some(name => response.headers.get(name) !== null)) {
+    throw new AnthropicFormatError(`Anthropic response carried no rate-limit headers (HTTP ${status})`);
+  }
 
   // Clamp to the 0..1 contract (cache validation enforces it too); a malformed header
   // must not surface as a NaN/out-of-range utilization downstream.
@@ -575,7 +738,7 @@ export function readZaiEnvelopeFailure(json: unknown): { code: number | null, st
 }
 
 /** Marks "your key was refused" so the caller can back off instead of retrying every tick. */
-export class ZaiAuthError extends Error {}
+export class ZaiAuthError extends CredentialRejectedError {}
 
 /**
  * Marks a failure that repeating cannot fix: the payload shape moved, or the endpoint answered
@@ -587,7 +750,7 @@ export class ZaiAuthError extends Error {}
  * on every tick. A network blip is worth retrying in sixty seconds — a payload that no longer
  * parses is not.
  */
-export class ZaiFormatError extends Error {}
+export class ZaiFormatError extends QuotaFormatError {}
 
 export async function fetchZaiQuota(
   baseUrl: string,

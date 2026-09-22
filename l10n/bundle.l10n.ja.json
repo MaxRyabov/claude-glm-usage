@@ -13,7 +13,7 @@
   "🤖 Not logged in": "🤖 未ログイン",
   "🤖 Claude: run refresh": "🤖 Claude: 更新してください",
   "🤖 Claude: loading...": "🤖 Claude: 読み込み中...",
-  "Claude Code is not logged in.\nRun: claude login": "Claude Code にログインしていません。\n実行してください: claude login",
+  "Claude Code is not logged in.\nRun: claude auth login": "Claude Code にログインしていません。\n実行してください: claude auth login",
   "No usage data found.\nClick to open dashboard →": "使用データが見つかりません。\nクリックしてダッシュボードを開く →",
   "Claude Code Usage": "Claude Code 使用状況",
   "Token Cost (local)": "トークンコスト（ローカル）",
@@ -106,5 +106,18 @@
   "🤖 API key rejected": "🤖 APIキーが拒否されました",
   "The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json": "プロバイダーが API キーを拒否しました。\n~/.claude/settings.json の ANTHROPIC_AUTH_TOKEN（または ANTHROPIC_API_KEY）を確認してください",
   "{0} of {1} credits used": "{1} 中 {0} クレジット使用",
-  "{0} of {1} credits used — {2} left": "{1} 中 {0} クレジット使用 — 残り {2}"
+  "{0} of {1} credits used — {2} left": "{1} 中 {0} クレジット使用 — 残り {2}",
+  "🤖 Login rejected": "🤖 ログインが拒否されました",
+  "🤖 Access refused": "🤖 アクセスが拒否されました",
+  "🤖 Login expired": "🤖 ログインの期限切れ",
+  "Claude Code login token expired — any Claude Code request refreshes it": "Claude Code のログイントークンの期限が切れました — Claude Code でリクエストを送ると更新されます",
+  "z.ai API key is not configured.\nSet ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "z.ai の API キーが設定されていません。\n~/.claude/settings.json に ANTHROPIC_AUTH_TOKEN を設定してください",
+  "Claude Code is not logged in.\nRun: claude auth login — or, for z.ai, set ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "Claude Code にログインしていません。\n実行してください: claude auth login — z.ai の場合は ~/.claude/settings.json に ANTHROPIC_AUTH_TOKEN を設定してください",
+  "Anthropic refused access (HTTP 403).\nThis is not always a login problem: check region, organization policy or proxy.": "Anthropic がアクセスを拒否しました (HTTP 403)。\nログインの問題とは限りません: リージョン、組織のポリシー、プロキシを確認してください。",
+  "Anthropic rejected your Claude Code login.\nRun: claude auth login, then \"Claude+GLM: Refresh Now\"": "Anthropic が Claude Code のログインを拒否しました。\n実行してください: claude auth login、その後「Claude+GLM: 今すぐ更新」",
+  "(credentials rejected)": "（認証情報が拒否されました）",
+  "(login token expired)": "（ログイントークンの期限切れ）",
+  "Z.AI Usage": "Z.AI 使用状況",
+  "Z.AI / GLM": "Z.AI / GLM",
+  "Custom endpoint": "カスタムエンドポイント"
 }

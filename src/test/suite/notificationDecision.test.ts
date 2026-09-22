@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import {
   bucketFor,
   decideRateLimitNotifications,
+  rateSignalsFor,
   RateLimitThresholds,
   RateLimitUsage,
 } from '../../data/notificationDecision';
@@ -146,5 +147,27 @@ suite('NotificationDecision', () => {
       );
       assert.strictEqual(out[0].key, '5h-87');
     });
+  });
+});
+
+suite('rateSignalsFor', () => {
+  const usage = { utilization5h: 0.92, utilization7d: 0.5, resetIn5h: 1800, resetIn7d: 86400, has7dLimit: true };
+
+  test('live data passes through unchanged', () => {
+    for (const dataSource of ['api', 'cache', 'stale'] as const) {
+      assert.deepStrictEqual(rateSignalsFor({ ...usage, providerType: 'claude-ai', dataSource }), usage, dataSource);
+    }
+  });
+
+  test('no live data, no signals: an old 92% behind a refused key raises nothing', () => {
+    for (const dataSource of ['auth-rejected', 'local-only', 'no-data', 'no-credentials'] as const) {
+      assert.strictEqual(rateSignalsFor({ ...usage, providerType: 'claude-ai', dataSource }), null, dataSource);
+    }
+    // The same 92% would notify if it were live — so the null above is what suppresses it.
+    assert.ok(decideRateLimitNotifications(usage, THRESHOLDS, new Set()).length > 0);
+  });
+
+  test('a cost-only provider never yields signals', () => {
+    assert.strictEqual(rateSignalsFor({ ...usage, providerType: 'aws-bedrock', dataSource: 'api' }), null);
   });
 });

@@ -13,7 +13,7 @@
   "🤖 Not logged in": "🤖 未登录",
   "🤖 Claude: run refresh": "🤖 Claude: 请刷新",
   "🤖 Claude: loading...": "🤖 Claude: 加载中...",
-  "Claude Code is not logged in.\nRun: claude login": "Claude Code 未登录。\n请运行：claude login",
+  "Claude Code is not logged in.\nRun: claude auth login": "Claude Code 未登录。\n请运行：claude auth login",
   "No usage data found.\nClick to open dashboard →": "未找到使用数据。\n点击打开仪表板 →",
   "Claude Code Usage": "Claude Code 用量",
   "Token Cost (local)": "令牌费用（本地）",
@@ -106,5 +106,18 @@
   "🤖 API key rejected": "🤖 API 密钥被拒绝",
   "The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json": "服务商拒绝了你的 API 密钥。\n请检查 ~/.claude/settings.json 中的 ANTHROPIC_AUTH_TOKEN（或 ANTHROPIC_API_KEY）",
   "{0} of {1} credits used": "已用 {0}／共 {1} 积分",
-  "{0} of {1} credits used — {2} left": "已用 {0}／共 {1} 积分 — 剩余 {2}"
+  "{0} of {1} credits used — {2} left": "已用 {0}／共 {1} 积分 — 剩余 {2}",
+  "🤖 Login rejected": "🤖 登录被拒绝",
+  "🤖 Access refused": "🤖 访问被拒绝",
+  "🤖 Login expired": "🤖 登录已过期",
+  "Claude Code login token expired — any Claude Code request refreshes it": "Claude Code 登录令牌已过期 — 在 Claude Code 中发起任意请求即可刷新",
+  "z.ai API key is not configured.\nSet ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "未配置 z.ai API 密钥。\n请在 ~/.claude/settings.json 中设置 ANTHROPIC_AUTH_TOKEN",
+  "Claude Code is not logged in.\nRun: claude auth login — or, for z.ai, set ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "Claude Code 未登录。\n请运行：claude auth login — 如使用 z.ai，请在 ~/.claude/settings.json 中设置 ANTHROPIC_AUTH_TOKEN",
+  "Anthropic refused access (HTTP 403).\nThis is not always a login problem: check region, organization policy or proxy.": "Anthropic 拒绝了访问（HTTP 403）。\n不一定是登录问题：请检查地区、组织策略或代理。",
+  "Anthropic rejected your Claude Code login.\nRun: claude auth login, then \"Claude+GLM: Refresh Now\"": "Anthropic 拒绝了你的 Claude Code 登录。\n请运行：claude auth login，然后执行“Claude+GLM: 立即刷新”",
+  "(credentials rejected)": "（凭据被拒绝）",
+  "(login token expired)": "（登录令牌已过期）",
+  "Z.AI Usage": "Z.AI 用量",
+  "Z.AI / GLM": "Z.AI / GLM",
+  "Custom endpoint": "自定义端点"
 }

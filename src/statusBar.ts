@@ -45,9 +45,17 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
     return vscode.l10n.t('🤖 Not logged in');
   }
   if (dataSource === 'no-data') {
-    return vscode.l10n.t('🤖 Claude: run refresh');
+    // "Run refresh" would not help an expired login: only Claude Code can renew the token.
+    return data.pollNotice === 'token-expired'
+      ? vscode.l10n.t('🤖 Login expired')
+      : vscode.l10n.t('🤖 Claude: run refresh');
   }
   if (dataSource === 'auth-rejected') {
+    if (providerType === 'claude-ai') {
+      return data.rejectionStatus === 403
+        ? vscode.l10n.t('🤖 Access refused')
+        : vscode.l10n.t('🤖 Login rejected');
+    }
     return vscode.l10n.t('🤖 API key rejected');
   }
 
@@ -107,6 +115,34 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
   return isStale ? `${main}${staleSuffix}` : main;
 }
 
+// The login command is `claude auth login`: Claude Code has no `claude login` subcommand, and
+// that string used to be the advice here.
+function notLoggedInHint(providerType: ClaudeUsageData['providerType']): string {
+  if (providerType === 'claude-ai') {
+    return vscode.l10n.t('Claude Code is not logged in.\nRun: claude auth login');
+  }
+  if (providerType === 'z-ai') {
+    return vscode.l10n.t('z.ai API key is not configured.\nSet ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json');
+  }
+  // 'unknown' is what auto-detection returns when it found no credential of any kind — the
+  // user may be heading for either provider, so both ways in are named.
+  return vscode.l10n.t('Claude Code is not logged in.\nRun: claude auth login — or, for z.ai, set ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json');
+}
+
+function rejectedHint(providerType: ClaudeUsageData['providerType'], status: 401 | 403 | undefined): string {
+  if (providerType === 'claude-ai') {
+    // 403 also comes from region, organization policy or a proxy, where logging in again does
+    // nothing. A status lost on the way (restored from a snapshot) reads as the common 401.
+    if (status === 403) {
+      return vscode.l10n.t('Anthropic refused access (HTTP 403).\nThis is not always a login problem: check region, organization policy or proxy.');
+    }
+    // The pause after a refusal lifts only on success, so the user has to trigger that refresh.
+    // The command is named exactly as the palette shows it (package.nls*.json, cmd.refresh).
+    return vscode.l10n.t('Anthropic rejected your Claude Code login.\nRun: claude auth login, then "Claude+GLM: Refresh Now"');
+  }
+  return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json');
+}
+
 export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostData[] = []): string {
   const {
     utilization5h, utilization7d, resetIn5h, resetIn7d,
@@ -114,20 +150,26 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
     cacheAge, dataSource, has7dLimit, providerType,
   } = data;
 
+  const tokenExpired = data.pollNotice === 'token-expired'
+    ? vscode.l10n.t('Claude Code login token expired — any Claude Code request refreshes it')
+    : null;
+
   if (dataSource === 'no-credentials') {
-    return vscode.l10n.t('Claude Code is not logged in.\nRun: claude login');
+    return notLoggedInHint(providerType);
   }
   if (dataSource === 'no-data') {
-    return vscode.l10n.t('No usage data found.\nClick to open dashboard →');
+    const hint = vscode.l10n.t('No usage data found.\nClick to open dashboard →');
+    return tokenExpired ? `${tokenExpired}\n${hint}` : hint;
   }
   if (dataSource === 'auth-rejected') {
-    return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json');
+    return rejectedHint(providerType, data.rejectionStatus);
   }
 
   const lastUpdated = cacheAge < 60
     ? vscode.l10n.t('just now')
     : vscode.l10n.t('{0} ago', formatDuration(cacheAge));
   const lines: string[] = [];
+  if (tokenExpired) { lines.push(tokenExpired, ''); }
 
   // Rate-limit section — claude-ai (Anthropic windows) and z-ai (quota), when live data exists
   const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';

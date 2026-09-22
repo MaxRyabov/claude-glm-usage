@@ -13,7 +13,7 @@
   "🤖 Not logged in": "🤖 Не выполнен вход",
   "🤖 Claude: run refresh": "🤖 Claude: обновите",
   "🤖 Claude: loading...": "🤖 Claude: загрузка...",
-  "Claude Code is not logged in.\nRun: claude login": "В Claude Code не выполнен вход.\nВыполните: claude login",
+  "Claude Code is not logged in.\nRun: claude auth login": "В Claude Code не выполнен вход.\nВыполните: claude auth login",
   "No usage data found.\nClick to open dashboard →": "Данные об использовании не найдены.\nНажмите, чтобы открыть панель →",
   "Claude Code Usage": "Использование Claude Code",
   "Token Cost (local)": "Стоимость токенов (локально)",
@@ -106,5 +106,18 @@
   "🤖 API key rejected": "🤖 Ключ API отвергнут",
   "The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json": "Провайдер отверг ваш ключ API.\nПроверьте ANTHROPIC_AUTH_TOKEN (или ANTHROPIC_API_KEY) в ~/.claude/settings.json",
   "{0} of {1} credits used": "Использовано {0} из {1} кредитов",
-  "{0} of {1} credits used — {2} left": "Использовано {0} из {1} кредитов — осталось {2}"
+  "{0} of {1} credits used — {2} left": "Использовано {0} из {1} кредитов — осталось {2}",
+  "🤖 Login rejected": "🤖 Вход отвергнут",
+  "🤖 Access refused": "🤖 Доступ запрещён",
+  "🤖 Login expired": "🤖 Вход истёк",
+  "Claude Code login token expired — any Claude Code request refreshes it": "Токен входа Claude Code истёк — любой запрос в Claude Code его обновит",
+  "z.ai API key is not configured.\nSet ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "Ключ API z.ai не настроен.\nЗадайте ANTHROPIC_AUTH_TOKEN в ~/.claude/settings.json",
+  "Claude Code is not logged in.\nRun: claude auth login — or, for z.ai, set ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json": "В Claude Code не выполнен вход.\nВыполните: claude auth login — или для z.ai задайте ANTHROPIC_AUTH_TOKEN в ~/.claude/settings.json",
+  "Anthropic refused access (HTTP 403).\nThis is not always a login problem: check region, organization policy or proxy.": "Anthropic отказал в доступе (HTTP 403).\nДело не всегда во входе: проверьте регион, политику организации или прокси.",
+  "Anthropic rejected your Claude Code login.\nRun: claude auth login, then \"Claude+GLM: Refresh Now\"": "Anthropic отверг вход в Claude Code.\nВыполните: claude auth login, затем «Claude+GLM: Обновить сейчас»",
+  "(credentials rejected)": "(учётные данные отвергнуты)",
+  "(login token expired)": "(токен входа истёк)",
+  "Z.AI Usage": "Использование Z.AI",
+  "Z.AI / GLM": "Z.AI / GLM",
+  "Custom endpoint": "Сторонний адрес API"
 }

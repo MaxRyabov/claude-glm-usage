@@ -213,6 +213,33 @@ const resetIn5h = reset5hStr ? Math.max(0, parseInt(reset5hStr, 10) - nowSec) : 
 const resetIn7d = reset7dStr ? Math.max(0, parseInt(reset7dStr, 10) - nowSec) : 0
 ```
 
+### Classifying the Response
+
+`fetchRateLimitData` checks, in this order, before any header is parsed:
+
+| Condition | Result | Poll backoff |
+|---|---|---|
+| No credentials file, no token, no Keychain entry, or a configured path outside `~/.claude` | `CredentialsUnavailableError` → `no-credentials` without cache | none |
+| Credentials file is not valid JSON (e.g. caught mid-write) | plain `Error` → retryable | retry after 5 min |
+| `expiresAt` (epoch ms) ≤ now + 60 s | `AnthropicTokenExpiredError`, **no request sent** → cache/stale/cost with "login token expired" | none |
+| HTTP 401 / 403 | `AnthropicAuthError(status)` → `auth-rejected` | `max(TTL, 5 min)` |
+| HTTP 5xx (incl. 529) | plain `Error` → retryable | retry after 5 min |
+| None of the five headers above present (200, 400, 404, 429 …) | `AnthropicFormatError` → cache/stale/cost | `max(TTL, 5 min)` |
+| Otherwise | headers parsed as below, whatever the status — a 429 with `5h-status: denied` still yields `denied` | — |
+
+Without these checks a response with no rate-limit headers (an expired token answers
+`401 authentication_error` with none) was parsed from defaults into "0% used, allowed" and
+cached as live data for a whole TTL (issue #8).
+
+`expiresAt` counts only if it is a finite number ≥ `1e12` and at most a year ahead; anything
+else is treated as "no expiry" and the request is sent. On macOS with the default path, an
+expired file token is compared with the Keychain entry and the later expiry wins — Claude Code
+v2.x keeps its live token in the Keychain, and a stale file must not pin the extension to
+"expired". The Keychain is read only on the poll path, never during provider detection.
+
+Error messages carry the HTTP status only — never the token or the response body. The body is
+always cancelled unread, on success and on failure.
+
 `limitStatus` derivation:
 
 ```typescript
@@ -253,8 +280,11 @@ const creds: ClaudeCredentials = JSON.parse(await fs.readFile(credPath, 'utf-8')
 const token = creds.claudeAiOauth?.accessToken
 ```
 
-If the file doesn't exist or the token is missing, set `dataSource: 'no-credentials'`
-and show a status bar message guiding the user to log in with Claude Code.
+If the file doesn't exist or the token is missing, `readCredentials` throws
+`CredentialsUnavailableError`; without a cache that becomes `dataSource: 'no-credentials'`,
+and the status bar tells the user to run `claude auth login` (Claude Code has no
+`claude login` subcommand). Only this error means "not logged in" — an outage or an
+unrecognised response without a cache shows cost-only or no data instead.
 
 ### Provider Detection
 
@@ -427,16 +457,28 @@ function getCacheAge(cache: CacheFile): number {
 
 ### When to Call the API
 
+The decision is the pure `pollDecision` in `src/data/pollOutcome.ts`:
+
 ```typescript
-async function shouldCallApi(cache): Promise<boolean> {
-  if (!cache) return true                          // no cache yet
-  if (!isCacheValid(cache, config.cacheTtl)) {
-    const jsonlUpdatedRecently = await wasJsonlUpdatedRecently(300) // 5 min
-    return jsonlUpdatedRecently                    // only call if Claude was active
-  }
-  return false                                     // cache is fresh
-}
+if (force) return 'poll'                                   // manual refresh bypasses everything below
+if (pauseReason !== null) return 'skip'                    // refused key / format drift: max(TTL, 5 min)
+if (retryableFailureAt within 5 min) return 'skip'         // network / 5xx: retried, but not sooner
+if (!cache) return 'poll'
+if (cache expired) return 'poll-if-jsonl-recent'           // caller runs wasJsonlUpdatedRecently(300) lazily
+return 'skip'                                              // cache is fresh
 ```
+
+The pause never drops below five minutes, because `cache.ttlSeconds` can be set as low as 60.
+It is lifted by a successful poll of this window, or by a cache entry of the same provider
+written after the failure (another window polled successfully). A manual refresh while another
+window holds the poll lock shows the current cache; the winner's result arrives with the next
+refresh.
+
+What a failed poll shows is `pollFailureOutcome`; every branch that did not poll by itself
+(skipped, lock held elsewhere, fresh cache under the lock) goes through `noPollOutcome`, so an
+active credential pause keeps showing `auth-rejected`. `showsRateData` decides whether
+utilization is live for the dashboard bars and prediction chart, the prediction, threshold
+notifications and the startup snapshot.
 
 `wasJsonlUpdatedRecently(seconds)`: check if any `.jsonl` file under
 `~/.claude/projects/` has an `mtime` within the last `seconds` seconds.

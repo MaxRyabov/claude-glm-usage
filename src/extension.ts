@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { DataManager, ClaudeUsageData, PredictionData } from './data/dataManager';
 import { StatusBarManager, formatDuration } from './statusBar';
 import { config } from './config';
-import { decideRateLimitNotifications, RateLimitNotification } from './data/notificationDecision';
+import { decideRateLimitNotifications, rateSignalsFor, RateLimitNotification } from './data/notificationDecision';
 
 // --- Notification system ---
 // Deduplication: bucket keys (e.g. '5h-92', '7d-85') are cleared per window when that
@@ -50,11 +50,16 @@ async function showRateLimitNotification(n: RateLimitNotification): Promise<void
 }
 
 async function checkAndNotify(data: ClaudeUsageData, prediction: PredictionData | null): Promise<void> {
-  checkWindowResets(data.resetIn5h, data.resetIn7d);
+  // Both the rollover check and the warnings need live utilization; without it they would act
+  // on an old cache or on zeros (see rateSignalsFor).
+  const signals = rateSignalsFor(data);
+  if (signals) {
+    checkWindowResets(signals.resetIn5h, signals.resetIn7d);
+  }
 
   // Rate limit warnings — driven by actual quota utilization, not a time prediction.
-  if (config.rateLimitWarning) {
-    const notifications = decideRateLimitNotifications(data, config.rateLimitThresholds, notifiedKeys);
+  if (config.rateLimitWarning && signals) {
+    const notifications = decideRateLimitNotifications(signals, config.rateLimitThresholds, notifiedKeys);
     for (const n of notifications) {
       notifiedKeys.add(n.key); // mark before await to prevent duplicates
       await showRateLimitNotification(n);
