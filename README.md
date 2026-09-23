@@ -113,9 +113,9 @@ Real-time usage summary pinned to the VS Code status bar.
 | With project cost | `🤖 5h:78% 7d:84% \| my-app:$3.21` |
 | Stale cache | `🤖 5h:78% 7d:84% [10m ago]` |
 | Not logged in | `🤖 Not logged in` |
-| Claude login rejected (401) | `🤖 Login rejected` |
+| Claude login rejected (401 or unknown status) | `🤖 Login rejected` |
 | Claude access refused (403) | `🤖 Access refused` |
-| Claude login expired | `🤖 Login expired` |
+| Claude login expired, nothing cached | `🤖 Login expired` |
 | z.ai rejected the API key | `🤖 API key rejected` |
 
 Hover for a detailed tooltip with full token breakdown and reset times.
