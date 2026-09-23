@@ -9,6 +9,32 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dead Claude login showed as "0 % used".** The Anthropic path never checked the response
+  status: an expired or revoked OAuth token (HTTP 401, no rate-limit headers) was parsed from
+  defaults into "0 % used, allowed" and cached as live data for a whole TTL (#8). Now:
+  - an expired token is not sent at all; the last known data stays, with "login token expired"
+    in the tooltip — Claude Code renews the token on its next request. On macOS a stale
+    credentials file no longer hides a fresh token in the Keychain;
+  - HTTP 401 shows **🤖 Login rejected** with `claude auth login`, HTTP 403 shows a neutral
+    **🤖 Access refused** — neither is polled again for `max(TTL, 5 min)`; a manual refresh
+    or a successful poll in another window lifts the pause;
+  - a response without rate-limit headers (200, 4xx, 429) is treated as an unrecognised
+    format and paused the same way, instead of becoming a cached zero;
+  - server errors (5xx) and network failures stay retryable, but no more often than once per
+    5 minutes — before, a network failure without a cache was retried every minute.
+- **"Not logged in" for an outage.** Any failed poll without a cache used to read as "not
+  logged in". That state now appears only when there really are no credentials, and not for
+  Bedrock, API-key or custom-endpoint users without local cost data.
+- **Old utilization behind a refused key.** The dashboard bars and prediction chart, the
+  prediction, the threshold notifications and the startup snapshot no longer use utilization
+  from an old cache (or zeros) when no live rate-limit data is available.
+- **`claude login` does not exist.** The not-logged-in hint and the READMEs now say
+  `claude auth login`; a z.ai user without a key is pointed to `ANTHROPIC_AUTH_TOKEN` instead.
+- The status-bar tooltip labels "Z.AI Usage", "Z.AI / GLM" and "Custom endpoint" were never
+  translated; they now are, and a test checks that every runtime string exists in every bundle.
+
 ---
 
 ## [1.2.0] — 2026-09-21

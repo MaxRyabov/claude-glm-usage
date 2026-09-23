@@ -68,3 +68,22 @@ suite('WebView credit amounts and plan tier', () => {
     assert.ok(html.includes('el.textContent = tmpl'), 'amounts must be set via textContent');
   });
 });
+
+suite('WebView rate data visibility', () => {
+  // The host decides whether utilization is live (dashboardUsage → showRateData, covered in
+  // pollOutcome.test.ts). The page must use that decision and not re-derive its own: its own
+  // condition excluded only 'local-only', and drew an old cache's numbers behind a refused key.
+  test('the page reads showRateData', () => {
+    assert.ok(html.includes('usage.showRateData === true'), 'the page must consult showRateData');
+  });
+
+  test('the page has no rate-data condition of its own', () => {
+    assert.ok(!html.includes("dataSource !== 'local-only'"),
+      "a local 'local-only' check means the page decides by itself again");
+  });
+
+  test('the footer names a refused credential and an expired token', () => {
+    assert.ok(html.includes("usage.dataSource === 'auth-rejected'"), 'footer branch for a refusal');
+    assert.ok(html.includes("usage.pollNotice === 'token-expired'"), 'footer branch for an expired token');
+  });
+});

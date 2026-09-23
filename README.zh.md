@@ -129,7 +129,7 @@ Claude Status: Set Budget...
 
 | 提供商 | 认证方式 | 显示内容 |
 |--------|---------|---------|
-| Claude.ai 订阅 | `claude login` — v2.x+（Mac）凭证存储于 macOS 钥匙串，旧版本使用 `~/.claude/.credentials.json`，均自动检测 | 速率限制 % + 费用 |
+| Claude.ai 订阅 | `claude auth login` — v2.x+（Mac）凭证存储于 macOS 钥匙串，旧版本使用 `~/.claude/.credentials.json`，均自动检测 | 速率限制 % + 费用 |
 | AWS Bedrock | AWS 凭证（环境变量或 `~/.aws/`） | 仅费用 |
 | Anthropic API 密钥 | `ANTHROPIC_API_KEY` 环境变量 | 仅费用 |
 

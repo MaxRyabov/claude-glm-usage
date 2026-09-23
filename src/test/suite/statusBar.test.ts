@@ -169,3 +169,79 @@ suite('StatusBar', () => {
     assert.ok(tooltip.includes('Custom endpoint'), `Expected custom-endpoint label in tooltip:\n${tooltip}`);
   });
 });
+
+suite('Refused, missing and expired credentials', () => {
+  const LOGIN = 'claude auth login';
+  const ZAI_VAR = 'ANTHROPIC_AUTH_TOKEN';
+
+  test('Anthropic 401: login rejected, told to log in and refresh', () => {
+    const data = makeData({ dataSource: 'auth-rejected', providerType: 'claude-ai', rejectionStatus: 401 });
+    assert.strictEqual(buildLabel(data), '🤖 Login rejected');
+    const tip = buildTooltip(data);
+    assert.ok(tip.includes(LOGIN), tip);
+    assert.ok(tip.includes('Claude+GLM: Refresh Now'), tip);
+    assert.ok(!tip.includes(ZAI_VAR), 'the z.ai variable is no cure for an Anthropic login');
+  });
+
+  test('Anthropic refusal without a status reads as 401', () => {
+    const data = makeData({ dataSource: 'auth-rejected', providerType: 'claude-ai' });
+    assert.strictEqual(buildLabel(data), '🤖 Login rejected');
+    assert.ok(buildTooltip(data).includes(LOGIN));
+  });
+
+  test('Anthropic 403: access refused, no login advice', () => {
+    const data = makeData({ dataSource: 'auth-rejected', providerType: 'claude-ai', rejectionStatus: 403 });
+    assert.strictEqual(buildLabel(data), '🤖 Access refused');
+    const tip = buildTooltip(data);
+    assert.ok(tip.includes('403'), tip);
+    assert.ok(!tip.includes(LOGIN), 'logging in again does not fix a region or policy refusal');
+  });
+
+  test('z.ai refusal keeps its key advice', () => {
+    const data = makeData({ dataSource: 'auth-rejected', providerType: 'z-ai' });
+    assert.strictEqual(buildLabel(data), '🤖 API key rejected');
+    const tip = buildTooltip(data);
+    assert.ok(tip.includes(ZAI_VAR), tip);
+    assert.ok(!tip.includes(LOGIN), tip);
+  });
+
+  test('not logged in: the hint depends on the provider', () => {
+    const claude = buildTooltip(makeData({ dataSource: 'no-credentials', providerType: 'claude-ai' }));
+    assert.ok(claude.includes(LOGIN) && !claude.includes(ZAI_VAR), claude);
+    const zai = buildTooltip(makeData({ dataSource: 'no-credentials', providerType: 'z-ai' }));
+    assert.ok(zai.includes(ZAI_VAR) && !zai.includes(LOGIN), zai);
+    // Auto-detection found nothing: the user may be heading for either provider.
+    const unknown = buildTooltip(makeData({ dataSource: 'no-credentials', providerType: 'unknown' }));
+    assert.ok(unknown.includes(LOGIN) && unknown.includes(ZAI_VAR), unknown);
+  });
+
+  test('no hint names the non-existent `claude login`', () => {
+    const states: Partial<ClaudeUsageData>[] = [
+      { dataSource: 'no-credentials', providerType: 'claude-ai' },
+      { dataSource: 'no-credentials', providerType: 'unknown' },
+      { dataSource: 'auth-rejected', providerType: 'claude-ai', rejectionStatus: 401 },
+    ];
+    for (const s of states) {
+      const tip = buildTooltip(makeData(s));
+      assert.ok(tip.includes('claude'), 'fixture must reach a login hint');
+      assert.ok(!/claude login/.test(tip), tip);
+    }
+  });
+
+  test('an expired token with data keeps the label and explains in the tooltip', () => {
+    const data = makeData({ dataSource: 'stale', pollNotice: 'token-expired', cacheAge: 7200 });
+    const label = buildLabel(data);
+    assert.ok(label.startsWith('🤖 5h:'), `the data label stays: ${label}`);
+    const tip = buildTooltip(data);
+    assert.ok(tip.includes('login token expired'), tip);
+    assert.ok(!tip.includes(LOGIN), 'an expired token is renewed by Claude Code, not by logging in');
+  });
+
+  test('an expired token with nothing to show says so instead of "run refresh"', () => {
+    const data = makeData({ dataSource: 'no-data', pollNotice: 'token-expired' });
+    assert.strictEqual(buildLabel(data), '🤖 Login expired');
+    assert.ok(buildTooltip(data).includes('login token expired'));
+    // Without the notice the old label stays.
+    assert.strictEqual(buildLabel(makeData({ dataSource: 'no-data' })), '🤖 Claude: run refresh');
+  });
+});

@@ -186,7 +186,7 @@ Number of days is configurable via `claudeStatus.heatmap.days` (30 / 60 / 90).
 
 | Provider | Authentication | Display |
 |----------|---------------|---------|
-| Claude.ai subscription | `claude login` — credentials stored in macOS Keychain (v2.x+) or `~/.claude/.credentials.json`; detected automatically | Rate-limit % + cost |
+| Claude.ai subscription | `claude auth login` — credentials stored in macOS Keychain (v2.x+) or `~/.claude/.credentials.json`; detected automatically | Rate-limit % + cost |
 | GLM / z.ai | `ANTHROPIC_AUTH_TOKEN` in `~/.claude/settings.json` | Real quota % (+ credits on credit plans) + GLM cost |
 | AWS Bedrock | AWS credentials (env vars or `~/.aws/`) | Cost only |
 | Anthropic API key | `ANTHROPIC_API_KEY` env var | Cost only |

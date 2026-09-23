@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import {
   bucketFor,
   decideRateLimitNotifications,
+  rateSignalsFor,
+  windowRolledOver,
   RateLimitThresholds,
   RateLimitUsage,
 } from '../../data/notificationDecision';
@@ -146,5 +148,61 @@ suite('NotificationDecision', () => {
       );
       assert.strictEqual(out[0].key, '5h-87');
     });
+  });
+});
+
+suite('rateSignalsFor', () => {
+  const usage = { utilization5h: 0.92, utilization7d: 0.5, resetIn5h: 1800, resetIn7d: 86400, has7dLimit: true };
+
+  test('current data passes through unchanged', () => {
+    for (const dataSource of ['api', 'cache'] as const) {
+      assert.deepStrictEqual(rateSignalsFor({ ...usage, providerType: 'claude-ai', dataSource }), usage, dataSource);
+    }
+  });
+
+  test('no current data, no signals: an old 92% behind a refused key or in a snapshot raises nothing', () => {
+    for (const dataSource of ['auth-rejected', 'local-only', 'no-data', 'no-credentials', 'stale'] as const) {
+      assert.strictEqual(rateSignalsFor({ ...usage, providerType: 'claude-ai', dataSource }), null, dataSource);
+    }
+    // The same 92% would notify if it were live — so the null above is what suppresses it.
+    assert.ok(decideRateLimitNotifications(usage, THRESHOLDS, new Set()).length > 0);
+  });
+
+  test('a cost-only provider never yields signals', () => {
+    assert.strictEqual(rateSignalsFor({ ...usage, providerType: 'aws-bedrock', dataSource: 'api' }), null);
+  });
+});
+
+suite('windowRolledOver', () => {
+  const T0 = 1_800_000_000; // epoch seconds
+
+  test('the first observation is not a rollover', () => {
+    assert.strictEqual(windowRolledOver(null, 18000, T0), false);
+  });
+
+  test('ticks inside one window are not a rollover', () => {
+    const end = T0 + 10000;
+    assert.strictEqual(windowRolledOver(end, 10000 - 60, T0 + 60), false);
+    assert.strictEqual(windowRolledOver(end, 1, T0 + 9999), false);
+  });
+
+  test('a rollover between consecutive ticks is seen', () => {
+    const end = T0 + 30;
+    assert.strictEqual(windowRolledOver(end, 18000 - 30, T0 + 60), true);
+  });
+
+  test('a long gap that spans a rollover is still seen', () => {
+    // The review's case: 17000 s left, live data lost, the window rolls over, and data comes
+    // back 30000 s later with 5000 s left in the new window. Comparing remaining seconds
+    // (5000 > 17000 + 3600) missed this; comparing absolute ends does not.
+    const end = T0 + 17000;
+    assert.strictEqual(windowRolledOver(end, 5000, T0 + 30000), true);
+  });
+
+  test('a stale window that already ended reads as rolled over once an hour has passed', () => {
+    // resetIn is clamped to 0 after the reset time; the end then tracks "now".
+    const end = T0 + 100;
+    assert.strictEqual(windowRolledOver(end, 0, T0 + 100 + 1800), false);
+    assert.strictEqual(windowRolledOver(end, 0, T0 + 100 + 3601), true);
   });
 });

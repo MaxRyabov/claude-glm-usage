@@ -2,14 +2,20 @@ import * as vscode from 'vscode';
 import { DataManager, ClaudeUsageData, PredictionData } from './data/dataManager';
 import { StatusBarManager, formatDuration } from './statusBar';
 import { config } from './config';
-import { decideRateLimitNotifications, RateLimitNotification } from './data/notificationDecision';
+import {
+  decideRateLimitNotifications,
+  rateSignalsFor,
+  windowRolledOver,
+  RateLimitNotification,
+} from './data/notificationDecision';
 
 // --- Notification system ---
 // Deduplication: bucket keys (e.g. '5h-92', '7d-85') are cleared per window when that
 // window resets, so each step re-arms exactly once per fresh window.
 const notifiedKeys = new Set<string>();
-let prevResetIn5h = 0;
-let prevResetIn7d = 0;
+// Absolute ends (epoch seconds) of the windows at the last live observation.
+let prevWindowEnd5h: number | null = null;
+let prevWindowEnd7d: number | null = null;
 
 /** Drop all dedup keys for a window (prefix '5h-' / '7d-'). */
 function clearWindowKeys(prefix: string): void {
@@ -19,16 +25,18 @@ function clearWindowKeys(prefix: string): void {
 }
 
 function checkWindowResets(resetIn5h: number, resetIn7d: number): void {
-  // If resetIn increased by more than 1 hour, that window has rolled over.
-  if (resetIn5h > prevResetIn5h + 3600) {
+  // A window whose absolute end moved forward by more than an hour has rolled over — see
+  // windowRolledOver for why the end, not the remaining time, is compared.
+  const nowSec = Date.now() / 1000;
+  if (windowRolledOver(prevWindowEnd5h, resetIn5h, nowSec)) {
     clearWindowKeys('5h-');
     notifiedKeys.delete('budget'); // re-arm the daily budget alert on each 5h rollover (prior behavior)
   }
-  if (resetIn7d > prevResetIn7d + 3600) {
+  if (windowRolledOver(prevWindowEnd7d, resetIn7d, nowSec)) {
     clearWindowKeys('7d-');
   }
-  prevResetIn5h = resetIn5h;
-  prevResetIn7d = resetIn7d;
+  prevWindowEnd5h = nowSec + resetIn5h;
+  prevWindowEnd7d = nowSec + resetIn7d;
 }
 
 async function showRateLimitNotification(n: RateLimitNotification): Promise<void> {
@@ -50,11 +58,16 @@ async function showRateLimitNotification(n: RateLimitNotification): Promise<void
 }
 
 async function checkAndNotify(data: ClaudeUsageData, prediction: PredictionData | null): Promise<void> {
-  checkWindowResets(data.resetIn5h, data.resetIn7d);
+  // Both the rollover check and the warnings need live utilization; without it they would act
+  // on an old cache or on zeros (see rateSignalsFor).
+  const signals = rateSignalsFor(data);
+  if (signals) {
+    checkWindowResets(signals.resetIn5h, signals.resetIn7d);
+  }
 
   // Rate limit warnings — driven by actual quota utilization, not a time prediction.
-  if (config.rateLimitWarning) {
-    const notifications = decideRateLimitNotifications(data, config.rateLimitThresholds, notifiedKeys);
+  if (config.rateLimitWarning && signals) {
+    const notifications = decideRateLimitNotifications(signals, config.rateLimitThresholds, notifiedKeys);
     for (const n of notifications) {
       notifiedKeys.add(n.key); // mark before await to prevent duplicates
       await showRateLimitNotification(n);

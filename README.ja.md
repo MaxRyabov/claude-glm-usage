@@ -136,7 +136,7 @@ Claude Status: Set Budget...
 
 | プロバイダー | 認証方法 | 表示内容 |
 |-------------|---------|---------|
-| Claude.ai サブスクリプション | `claude login` — v2.x+ (Mac) はmacOSキーチェーンに保存、旧バージョンは `~/.claude/.credentials.json`。いずれも自動検出 | レート制限 % + コスト |
+| Claude.ai サブスクリプション | `claude auth login` — v2.x+ (Mac) はmacOSキーチェーンに保存、旧バージョンは `~/.claude/.credentials.json`。いずれも自動検出 | レート制限 % + コスト |
 | AWS Bedrock | AWS認証情報（環境変数または `~/.aws/`） | コストのみ |
 | Anthropic APIキー | `ANTHROPIC_API_KEY` 環境変数 | コストのみ |
 

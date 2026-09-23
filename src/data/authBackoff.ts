@@ -19,6 +19,24 @@
  */
 export type PollBackoffReason = 'credentials' | 'format';
 
+/**
+ * Base class for "the provider refused our credential". Provider-specific errors extend it so
+ * the poll loop classifies a refusal without knowing which provider raised it: a branch per
+ * provider is exactly the kind of check a third provider forgets, and a forgotten branch
+ * turns a refused key back into a request on every tick.
+ */
+export class CredentialRejectedError extends Error {}
+
+/** Base class for "the answer's shape moved": repeating the call will not start parsing it. */
+export class QuotaFormatError extends Error {}
+
+/** The backoff a failure earns, or null for a failure that is worth retrying soon. */
+export function backoffReasonOf(err: unknown): PollBackoffReason | null {
+  if (err instanceof CredentialRejectedError) { return 'credentials'; }
+  if (err instanceof QuotaFormatError) { return 'format'; }
+  return null;
+}
+
 export class PollBackoff<P> {
   private startedAt: number | null = null;
   private provider: P | null = null;
@@ -52,6 +70,15 @@ export class PollBackoff<P> {
     // negative, which would otherwise hold the suppression until real time caught up again.
     if (elapsed < 0 || elapsed >= ttlSeconds) { return null; }
     return this.reason;
+  }
+
+  /**
+   * When the record for this provider was made, or null when there is none. A pure query,
+   * for the same reason as `activeReason`: it lets a caller notice that another window has
+   * since written fresh data, without this module deciding what that means.
+   */
+  recordedAt(provider: P): number | null {
+    return this.provider === provider ? this.startedAt : null;
   }
 
   isActive(provider: P, ttlSeconds: number, now: number = Date.now()): boolean {

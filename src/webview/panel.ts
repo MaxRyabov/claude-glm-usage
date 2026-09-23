@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { DataManager, ClaudeUsageData, ProjectCostData, PredictionData, HeatmapData } from '../data/dataManager';
 import { config } from '../config';
+import { dashboardUsage } from '../data/pollOutcome';
 import type { TokenPricing } from '../data/jsonlReader';
 
 interface DashboardSettings {
@@ -12,7 +13,9 @@ interface DashboardSettings {
 }
 
 interface DashboardMessage {
-  usage: ClaudeUsageData;
+  // `showRateData` is decided here, not in the page: the page used to exclude only
+  // 'local-only' and drew an old cache's utilization behind a refused key.
+  usage: ClaudeUsageData & { showRateData: boolean };
   projectCosts: ProjectCostData[];
   prediction: PredictionData | null;
   heatmap: HeatmapData | null;
@@ -77,6 +80,8 @@ function buildI18n(): Record<string, string> {
     apiDisabled:           t('API disabled'),
     editSettings:          t('⚙ Edit pricing & settings'),
     stale:                 t('(stale)'),
+    credentialsRejected:   t('(credentials rejected)'),
+    loginTokenExpired:     t('(login token expired)'),
     live:                  t('(live)'),
     justNow:               t('just now'),
     lastUpdated:           t('Last updated:'),
@@ -609,8 +614,7 @@ export function getWebviewContent(
 
     function updateUsage(usage, mode) {
       const denied = usage.limitStatus === 'denied';
-      const supportsRateLimit = usage.providerType === 'claude-ai' || usage.providerType === 'z-ai';
-      const hasRateData = supportsRateLimit && usage.dataSource !== 'local-only';
+      const hasRateData = usage.showRateData === true;
       const useCostMode = !hasRateData || mode === 'cost';
       const show7d = usage.has7dLimit && hasRateData;
 
@@ -693,7 +697,9 @@ export function getWebviewContent(
       const ageStr = usage.cacheAge < 60
         ? i18n.justNow
         : i18n.agoFmt.replace('__N__', fmt(usage.cacheAge));
-      const srcLabel = usage.dataSource === 'stale' ? ' ' + i18n.stale
+      const srcLabel = usage.dataSource === 'auth-rejected' ? ' ' + i18n.credentialsRejected
+                     : usage.pollNotice === 'token-expired' ? ' ' + i18n.loginTokenExpired
+                     : usage.dataSource === 'stale' ? ' ' + i18n.stale
                      : usage.dataSource === 'api'   ? ' ' + i18n.live : '';
       document.getElementById('footer').textContent =
         i18n.lastUpdated + ' ' + ageStr + srcLabel;
@@ -991,7 +997,7 @@ export function getWebviewContent(
       const canvas = document.getElementById('predChart');
       if (!canvas) { return; }
 
-      const isClaudeAi = usage && (usage.providerType === 'claude-ai' || usage.providerType === 'z-ai') && usage.dataSource !== 'local-only';
+      const isClaudeAi = usage && usage.showRateData === true;
       const hasUtil    = usage && usage.utilization5h > 0 && usage.resetIn5h > 0;
 
       if (!isClaudeAi || !hasUtil || typeof Chart === 'undefined') {
@@ -1425,7 +1431,7 @@ export class DashboardPanel {
     const message: { type: string; data: DashboardMessage } = {
       type: 'update',
       data: {
-        usage,
+        usage: dashboardUsage(usage),
         projectCosts: this.dataManager.getLastProjectCosts(),
         prediction,
         heatmap,

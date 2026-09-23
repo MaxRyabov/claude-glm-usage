@@ -8,6 +8,9 @@
 // The function is deliberately free of any `vscode` import so it can be unit-tested
 // without the Electron host — see prediction.ts / statusBar.ts for the same pattern.
 
+import type { ClaudeProvider } from './apiClient';
+import { DataSource, actsOnRateData } from './pollOutcome';
+
 export type NotifySeverity = 'warning' | 'error';
 
 export interface RateLimitNotification {
@@ -29,6 +32,51 @@ export interface RateLimitThresholds {
   sevenDayStartPercent: number;  // default 80
   sevenDayEndPercent: number;    // default 90
   sevenDayStepPercent: number;   // default 5
+}
+
+/**
+ * How far the observed window end may move forward without counting as a rollover.
+ *
+ * The end is estimated as `now + resetIn`, and that estimate wobbles between polls: reset
+ * headers are whole seconds, a cached reset is read against a later clock, and a window that
+ * already ended reports resetIn 0, so its estimate creeps forward with the clock. A rollover
+ * moves the end by a whole window — five hours at the least — so an hour sits far above the
+ * wobble and far below the jump. Zero would turn every wobble into a rollover and re-arm
+ * warnings already shown.
+ */
+const ROLLOVER_TOLERANCE_SEC = 3600;
+
+/**
+ * Whether a quota window has rolled over since the previous live observation.
+ *
+ * Compares absolute window ends (epoch seconds), not the remaining seconds: notifications only
+ * act on live data, so observations can be hours apart. With remaining seconds, a gap that
+ * spans a rollover and ends deep into the next window leaves the new remainder below the old
+ * one, the rollover goes unseen, and the new window never re-arms its warnings. An absolute
+ * end stays constant within a window and jumps by a whole window at a rollover, however long
+ * the gap. The first observation has nothing to compare with and is not a rollover. The end must
+ * move by more than ROLLOVER_TOLERANCE_SEC to count.
+ */
+export function windowRolledOver(prevEndAt: number | null, resetIn: number, nowSec: number): boolean {
+  if (prevEndAt === null) { return false; }
+  return nowSec + resetIn > prevEndAt + ROLLOVER_TOLERANCE_SEC;
+}
+
+/**
+ * The utilization and reset times notifications may act on, or null when they are not current.
+ *
+ * Without live data (a refused key, cost-only mode) the numbers are an old cache or zeros.
+ * 'stale' is excluded too: the startup snapshot's reset times are as old as the snapshot (see
+ * actsOnRateData).
+ * Acting on them raised "92% used" for a window nobody could see, and a switch from zeros back
+ * to real reset times looked like a window rollover, re-arming notifications already shown.
+ */
+export function rateSignalsFor(
+  data: RateLimitUsage & { providerType: ClaudeProvider; dataSource: DataSource },
+): RateLimitUsage | null {
+  if (!actsOnRateData(data.providerType, data.dataSource)) { return null; }
+  const { utilization5h, utilization7d, resetIn5h, resetIn7d, has7dLimit } = data;
+  return { utilization5h, utilization7d, resetIn5h, resetIn7d, has7dLimit };
 }
 
 export interface RateLimitUsage {

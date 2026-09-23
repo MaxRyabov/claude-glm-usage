@@ -11,8 +11,7 @@ import {
   detectProvider,
   RateLimitData,
   ClaudeProvider,
-  ZaiAuthError,
-  ZaiFormatError,
+  CredentialsUnavailableError,
   QuotaAmounts,
   QuotaBilling,
 } from './apiClient';
@@ -24,6 +23,19 @@ import { getHeatmapData as computeHeatmapData, HeatmapData } from '../webview/he
 import { loadPersistedCache, persistCache } from './entryCache';
 import { readSnapshot, writeSnapshot } from './snapshotCache';
 import { PollBackoff } from './authBackoff';
+import {
+  DataSource,
+  PollNotice,
+  pauseSeconds,
+  pollFailureOutcome,
+  idleDataSource,
+  pollDecision,
+  noPollOutcome,
+  supersededByCache,
+  activeNotice,
+  showsRateData,
+  snapshotDataSource,
+} from './pollOutcome';
 import { config } from '../config';
 
 export { PredictionData, HeatmapData };
@@ -61,7 +73,11 @@ export interface ClaudeUsageData {
   cacheAge: number
   // 'auth-rejected' is distinct from 'stale' on purpose: a network blip resolves itself,
   // a revoked key does not, and the user can only act on the second if we say which it is.
-  dataSource: 'api' | 'cache' | 'stale' | 'no-credentials' | 'no-data' | 'local-only' | 'auth-rejected'
+  dataSource: DataSource
+  // Why the data is not live, when that is worth telling the user (an expired login token).
+  pollNotice?: PollNotice
+  // HTTP status of an Anthropic refusal: only 401 is about logging in again.
+  rejectionStatus?: 401 | 403
 }
 
 export { ProjectCostData };
@@ -77,6 +93,19 @@ export class DataManager {
    * user-driven refresh deliberately bypasses it.
    */
   private readonly pollBackoff = new PollBackoff<ClaudeProvider>();
+
+  /**
+   * The last failed poll: when it happened, whether it is retryable (and so delayed rather than
+   * paused), the notice it earned and the refusal status. Cleared by a successful poll, or by a
+   * cache entry another window wrote after it.
+   */
+  private lastFailure: {
+    provider: ClaudeProvider
+    at: number
+    retryable: boolean
+    notice: PollNotice | null
+    rejectionStatus?: 401 | 403
+  } | null = null;
   private readonly _onDidUpdate = new vscode.EventEmitter<ClaudeUsageData>();
   readonly onDidUpdate: vscode.Event<ClaudeUsageData> = this._onDidUpdate.event;
 
@@ -147,7 +176,8 @@ export class DataManager {
     const localUsage = await readAllUsage(this.pricingContext(providerType));
 
     let rateLimitData: RateLimitData | null = null;
-    let dataSource: ClaudeUsageData['dataSource'] = 'no-data';
+    let dataSource: DataSource = 'no-data';
+    let notice: PollNotice | null = null;
 
     // claude-ai (Anthropic rate-limit headers) and z-ai (quota endpoint) both expose
     // utilization windows; everything else is cost-only.
@@ -155,78 +185,76 @@ export class DataManager {
     const hasCostData = localUsage.cost7d > 0 || localUsage.cost5h > 0;
 
     if (supportsRateLimit && config.rateLimitApiEnabled) {
-      if (forceRefresh || (await this.shouldCallApi(cache, providerType))) {
-        // All windows share one quota and one rate-limit cache — only the window that
-        // wins the cross-process lock polls; the rest reuse its cached result.
-        if (!(await acquireApiPollLock())) {
-          if (cache) {
-            rateLimitData = this.cacheToRateLimitData(cache.usageData);
-            dataSource = isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale';
-          } else {
-            dataSource = hasCostData ? 'local-only' : 'no-data';
-          }
-        } else {
-          try {
-            // Double-check under the lock: another window may have finished its poll
-            // between our cache read and the acquire — its result is already fresh.
-            const freshRaw = forceRefresh ? null : await readCache();
-            const fresh = freshRaw && freshRaw.providerType === providerType ? freshRaw : null;
-            if (fresh && isCacheValid(fresh, config.cacheTtlSeconds)) {
-              rateLimitData = this.cacheToRateLimitData(fresh.usageData);
-              dataSource = 'cache';
-            } else {
-              rateLimitData = providerType === 'z-ai'
-                ? await this.fetchZaiRateLimit()
-                : await fetchRateLimitData(config.credentialsPath);
-              await writeCache(rateLimitData, providerType);
-              this.pollBackoff.clear();
-              dataSource = 'api';
-            }
-          } catch (err) {
-            // missing token/credentials or network error — fall back to cache, else cost-only
-            const rejected = err instanceof ZaiAuthError;
-            // A payload we cannot parse will not parse in sixty seconds either, so it backs
-            // off like a refused key. Network and upstream faults stay retryable.
-            if (rejected) { this.pollBackoff.record(providerType, 'credentials'); }
-            else if (err instanceof ZaiFormatError) { this.pollBackoff.record(providerType, 'format'); }
-            if (cache) {
-              rateLimitData = this.cacheToRateLimitData(cache.usageData);
-              dataSource = rejected
-                ? 'auth-rejected'
-                : (isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale');
-            } else if (rejected) {
-              dataSource = 'auth-rejected';
-            } else {
-              dataSource = hasCostData ? 'local-only' : 'no-credentials';
-            }
-          } finally {
-            await releaseApiPollLock();
-          }
-        }
+      this.dropFailureSupersededBy(cache, providerType);
+      const decision = pollDecision({
+        force: forceRefresh,
+        pauseReason: this.activePause(providerType),
+        retryableFailureAt: this.retryableFailureAt(providerType),
+        cache: !cache ? 'none' : (isCacheValid(cache, config.cacheTtlSeconds) ? 'valid' : 'expired'),
+        now: Date.now(),
+      });
+      const shouldPoll = decision === 'poll'
+        || (decision === 'poll-if-jsonl-recent' && (await wasJsonlUpdatedRecently(300)));
+
+      if (!shouldPoll) {
+        ({ rateLimitData, dataSource } = this.withoutPoll(cache, providerType, hasCostData));
+      } else if (!(await acquireApiPollLock())) {
+        // All windows share one quota and one rate-limit cache — only the window that wins the
+        // cross-process lock polls. This one shows what it has; the winner's result is picked
+        // up by the next refresh.
+        ({ rateLimitData, dataSource } = this.withoutPoll(cache, providerType, hasCostData));
       } else {
-        // While a credential rejection is being backed off we skip the call, but the reason
-        // must survive: reverting to 'stale' here would tell the user their data is merely
-        // old, on every tick after the first.
-        const rejected = this.isAuthRejectionActive(providerType);
-        if (cache) {
-          rateLimitData = this.cacheToRateLimitData(cache.usageData);
-          dataSource = rejected
-            ? 'auth-rejected'
-            : (isCacheValid(cache, config.cacheTtlSeconds) ? 'cache' : 'stale');
-        } else if (rejected) {
-          dataSource = 'auth-rejected';
-        } else {
-          dataSource = hasCostData ? 'local-only' : 'no-data';
+        try {
+          // Double-check under the lock: another window may have finished its poll
+          // between our cache read and the acquire — its result is already fresh.
+          const freshRaw = forceRefresh ? null : await readCache();
+          const fresh = freshRaw && freshRaw.providerType === providerType ? freshRaw : null;
+          if (fresh && isCacheValid(fresh, config.cacheTtlSeconds)) {
+            this.dropFailureSupersededBy(fresh, providerType);
+            ({ rateLimitData, dataSource } = this.withoutPoll(fresh, providerType, hasCostData));
+          } else {
+            rateLimitData = providerType === 'z-ai'
+              ? await this.fetchZaiRateLimit()
+              : await fetchRateLimitData(config.credentialsPath);
+            await writeCache(rateLimitData, providerType);
+            this.pollBackoff.clear();
+            this.lastFailure = null;
+            dataSource = 'api';
+          }
+        } catch (err) {
+          const outcome = pollFailureOutcome(err, {
+            hasCache: cache !== null,
+            cacheValid: cache !== null && isCacheValid(cache, config.cacheTtlSeconds),
+            hasCostData,
+          });
+          const now = Date.now();
+          if (outcome.backoff) { this.pollBackoff.record(providerType, outcome.backoff, now); }
+          this.lastFailure = {
+            provider: providerType,
+            at: now,
+            retryable: outcome.retryDelay,
+            notice: outcome.notice,
+            ...(outcome.rejectionStatus !== undefined ? { rejectionStatus: outcome.rejectionStatus } : {}),
+          };
+          rateLimitData = cache ? this.cacheToRateLimitData(cache.usageData) : null;
+          dataSource = outcome.dataSource;
+        } finally {
+          await releaseApiPollLock();
         }
       }
+      notice = activeNotice(this.lastFailure, providerType);
     } else if (supportsRateLimit && cache) {
       // API disabled by user but cache exists — show stale rate limit data with age indicator
       rateLimitData = this.cacheToRateLimitData(cache.usageData);
       dataSource = 'stale';
     } else {
-      // Non-rate-limited provider, or no cache — cost only from local JSONL
-      dataSource = hasCostData ? 'local-only' : 'no-credentials';
+      // Non-rate-limited provider, or API disabled with no cache — cost only from local JSONL
+      dataSource = idleDataSource(providerType, hasCostData);
     }
+
+    const rejectionStatus = dataSource === 'auth-rejected' && this.lastFailure?.provider === providerType
+      ? this.lastFailure.rejectionStatus
+      : undefined;
 
     const cacheAge = cache ? getCacheAge(cache) : 0;
 
@@ -248,6 +276,8 @@ export class DataManager {
       lastUpdated: new Date(),
       cacheAge,
       dataSource,
+      ...(notice !== null ? { pollNotice: notice } : {}),
+      ...(rejectionStatus !== undefined ? { rejectionStatus } : {}),
     };
 
     this.lastData = data;
@@ -278,33 +308,51 @@ export class DataManager {
   private async fetchZaiRateLimit(): Promise<RateLimitData> {
     const [baseUrl, token] = await Promise.all([readClaudeBaseUrl(), readZaiToken()]);
     if (!baseUrl || !token) {
-      throw new Error('z.ai base URL or auth token not configured');
+      throw new CredentialsUnavailableError('z.ai base URL or auth token not configured');
     }
     return fetchZaiQuota(baseUrl, token);
   }
 
-  private async shouldCallApi(
-    cache: Awaited<ReturnType<typeof readCache>>,
+  /** The backoff currently suppressing automatic polls of this provider, if any. */
+  private activePause(providerType: ClaudeProvider): ReturnType<PollBackoff<ClaudeProvider>['activeReason']> {
+    return this.pollBackoff.activeReason(providerType, pauseSeconds(config.cacheTtlSeconds));
+  }
+
+  private retryableFailureAt(providerType: ClaudeProvider): number | null {
+    const f = this.lastFailure;
+    return f && f.provider === providerType && f.retryable ? f.at : null;
+  }
+
+  /**
+   * Forget a failure that fresh data has overtaken: another window polled the same provider
+   * successfully after it. Without this a window keeps "Login rejected" over good numbers
+   * until its own pause runs out.
+   */
+  private dropFailureSupersededBy(cache: CacheFile | null, providerType: ClaudeProvider): void {
+    if (!cache) { return; }
+    const pausedAt = this.pollBackoff.recordedAt(providerType);
+    const failedAt = this.lastFailure?.provider === providerType ? this.lastFailure.at : null;
+    const since = Math.max(pausedAt ?? -Infinity, failedAt ?? -Infinity);
+    if (!Number.isFinite(since) || !supersededByCache(cache.updatedAt, since)) { return; }
+    if (pausedAt !== null) { this.pollBackoff.clear(); }
+    this.lastFailure = null;
+  }
+
+  /** Rate data and state for a refresh that did not poll by itself. */
+  private withoutPoll(
+    cache: CacheFile | null,
     providerType: ClaudeProvider,
-  ): Promise<boolean> {
-    // A refused credential suppresses polling for one TTL. Network and upstream failures are
-    // deliberately NOT suppressed this way — those are transient and worth retrying, whereas
-    // a revoked key will still be revoked in five minutes.
-    if (this.isPollSuppressed(providerType)) { return false; }
-    if (!cache) { return true; }
-    if (!isCacheValid(cache, config.cacheTtlSeconds)) {
-      return await wasJsonlUpdatedRecently(300);
-    }
-    return false;
-  }
-
-  /** Whether the CREDENTIAL rejection is what is currently suppressing polling. */
-  private isAuthRejectionActive(providerType: ClaudeProvider): boolean {
-    return this.pollBackoff.activeReason(providerType, config.cacheTtlSeconds) === 'credentials';
-  }
-
-  private isPollSuppressed(providerType: ClaudeProvider): boolean {
-    return this.pollBackoff.isActive(providerType, config.cacheTtlSeconds);
+    hasCostData: boolean,
+  ): { rateLimitData: RateLimitData | null; dataSource: DataSource } {
+    return {
+      rateLimitData: cache ? this.cacheToRateLimitData(cache.usageData) : null,
+      dataSource: noPollOutcome({
+        hasCache: cache !== null,
+        cacheValid: cache !== null && isCacheValid(cache, config.cacheTtlSeconds),
+        hasCostData,
+        pauseReason: this.activePause(providerType),
+      }),
+    };
   }
 
   async refreshProjectCosts(): Promise<void> {
@@ -396,8 +444,9 @@ export class DataManager {
     await loadPersistedCache().catch(() => {});
     const snapshot = await readSnapshot().catch(() => null);
     if (snapshot) {
-      // Mark stale: this is last-known data pending a background refresh.
-      this.lastData = { ...snapshot.usage, dataSource: 'stale' };
+      // Last-known data pending a background refresh. Only live rate data becomes 'stale': a
+      // snapshot of a state without it would otherwise show its zero utilization as old data.
+      this.lastData = { ...snapshot.usage, dataSource: snapshotDataSource(snapshot.usage) };
       // The snapshot file is shared by every VSCode window, so its project costs may
       // belong to a different workspace. Only render entries matching this window's
       // folders; the background refresh fills in the rest.
@@ -450,10 +499,12 @@ export class DataManager {
 
   async getPrediction(): Promise<PredictionData | null> {
     if (!this.lastData) { return null; }
+    // Utilization from an old cache behind a refused key must not predict an exhaustion time.
+    const live = showsRateData(this.lastData.providerType, this.lastData.dataSource);
     try {
       const prediction = await computePrediction(
-        this.lastData.utilization5h,
-        this.lastData.resetIn5h,
+        live ? this.lastData.utilization5h : 0,
+        live ? this.lastData.resetIn5h : 0,
         this.lastData.cost5h,
         this.lastData.costDay,
         config.dailyBudget,
