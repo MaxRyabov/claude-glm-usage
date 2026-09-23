@@ -5,7 +5,7 @@ import { config } from './config';
 import {
   decideRateLimitNotifications,
   rateSignalsFor,
-  windowRolledOver,
+  trackWindowEnd,
   RateLimitNotification,
 } from './data/notificationDecision';
 
@@ -28,15 +28,17 @@ function checkWindowResets(resetIn5h: number, resetIn7d: number): void {
   // A window whose absolute end moved forward by more than an hour has rolled over — see
   // windowRolledOver for why the end, not the remaining time, is compared.
   const nowSec = Date.now() / 1000;
-  if (windowRolledOver(prevWindowEnd5h, resetIn5h, nowSec)) {
+  const w5h = trackWindowEnd(prevWindowEnd5h, resetIn5h, nowSec);
+  if (w5h.rolledOver) {
     clearWindowKeys('5h-');
     notifiedKeys.delete('budget'); // re-arm the daily budget alert on each 5h rollover (prior behavior)
   }
-  if (windowRolledOver(prevWindowEnd7d, resetIn7d, nowSec)) {
+  const w7d = trackWindowEnd(prevWindowEnd7d, resetIn7d, nowSec);
+  if (w7d.rolledOver) {
     clearWindowKeys('7d-');
   }
-  prevWindowEnd5h = nowSec + resetIn5h;
-  prevWindowEnd7d = nowSec + resetIn7d;
+  prevWindowEnd5h = w5h.endAt;
+  prevWindowEnd7d = w7d.endAt;
 }
 
 async function showRateLimitNotification(n: RateLimitNotification): Promise<void> {

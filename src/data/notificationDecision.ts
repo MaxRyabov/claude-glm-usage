@@ -9,7 +9,7 @@
 // without the Electron host — see prediction.ts / statusBar.ts for the same pattern.
 
 import type { ClaudeProvider } from './apiClient';
-import { DataSource, actsOnRateData } from './pollOutcome';
+import { type DataSource, actsOnRateData } from './pollOutcome';
 
 export type NotifySeverity = 'warning' | 'error';
 
@@ -38,28 +38,40 @@ export interface RateLimitThresholds {
  * How far the observed window end may move forward without counting as a rollover.
  *
  * The end is estimated as `now + resetIn`, and that estimate wobbles between polls: reset
- * headers are whole seconds, a cached reset is read against a later clock, and a window that
- * already ended reports resetIn 0, so its estimate creeps forward with the clock. A rollover
- * moves the end by a whole window — five hours at the least — so an hour sits far above the
- * wobble and far below the jump. Zero would turn every wobble into a rollover and re-arm
- * warnings already shown.
+ * headers are whole seconds and a cached reset is read against a later clock. A rollover moves
+ * the end by a whole window — five hours at the least — so an hour sits far above the wobble
+ * and far below the jump. Zero would turn every wobble into a rollover and re-arm warnings
+ * already shown.
  */
 const ROLLOVER_TOLERANCE_SEC = 3600;
 
+/** The remembered window end, and whether this observation crossed into a new window. */
+export interface WindowTracking {
+  rolledOver: boolean
+  /** The end to remember, or null while nothing usable has been observed. */
+  endAt: number | null
+}
+
 /**
- * Whether a quota window has rolled over since the previous live observation.
+ * Track a quota window across observations and report a rollover.
  *
  * Compares absolute window ends (epoch seconds), not the remaining seconds: notifications only
- * act on live data, so observations can be hours apart. With remaining seconds, a gap that
+ * act on current data, so observations can be hours apart. With remaining seconds, a gap that
  * spans a rollover and ends deep into the next window leaves the new remainder below the old
  * one, the rollover goes unseen, and the new window never re-arms its warnings. An absolute
  * end stays constant within a window and jumps by a whole window at a rollover, however long
- * the gap. The first observation has nothing to compare with and is not a rollover. The end must
- * move by more than ROLLOVER_TOLERANCE_SEC to count.
+ * the gap. The first observation has nothing to compare with and is not a rollover.
+ *
+ * `resetIn` of zero — a missing reset header, or a window whose reset time has passed — carries
+ * no window end at all: `now + 0` is not an end, it is the clock, and it creeps forward with it.
+ * Such an observation is ignored entirely, keeping the previous end. Treating it as an end made
+ * the estimate drift past the tolerance after an hour and re-fire warnings already shown, with
+ * no rollover behind it.
  */
-export function windowRolledOver(prevEndAt: number | null, resetIn: number, nowSec: number): boolean {
-  if (prevEndAt === null) { return false; }
-  return nowSec + resetIn > prevEndAt + ROLLOVER_TOLERANCE_SEC;
+export function trackWindowEnd(prevEndAt: number | null, resetIn: number, nowSec: number): WindowTracking {
+  if (resetIn <= 0) { return { rolledOver: false, endAt: prevEndAt }; }
+  const endAt = nowSec + resetIn;
+  return { rolledOver: prevEndAt !== null && endAt > prevEndAt + ROLLOVER_TOLERANCE_SEC, endAt };
 }
 
 /**
