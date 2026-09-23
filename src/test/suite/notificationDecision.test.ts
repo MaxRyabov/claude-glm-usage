@@ -3,7 +3,7 @@ import {
   bucketFor,
   decideRateLimitNotifications,
   rateSignalsFor,
-  windowRolledOver,
+  trackWindowEnd,
   RateLimitThresholds,
   RateLimitUsage,
 } from '../../data/notificationDecision';
@@ -173,36 +173,51 @@ suite('rateSignalsFor', () => {
   });
 });
 
-suite('windowRolledOver', () => {
+suite('trackWindowEnd', () => {
   const T0 = 1_800_000_000; // epoch seconds
 
-  test('the first observation is not a rollover', () => {
-    assert.strictEqual(windowRolledOver(null, 18000, T0), false);
+  test('the first observation is not a rollover but is remembered', () => {
+    assert.deepStrictEqual(trackWindowEnd(null, 18000, T0), { rolledOver: false, endAt: T0 + 18000 });
   });
 
   test('ticks inside one window are not a rollover', () => {
     const end = T0 + 10000;
-    assert.strictEqual(windowRolledOver(end, 10000 - 60, T0 + 60), false);
-    assert.strictEqual(windowRolledOver(end, 1, T0 + 9999), false);
+    assert.strictEqual(trackWindowEnd(end, 10000 - 60, T0 + 60).rolledOver, false);
+    assert.strictEqual(trackWindowEnd(end, 1, T0 + 9999).rolledOver, false);
   });
 
   test('a rollover between consecutive ticks is seen', () => {
     const end = T0 + 30;
-    assert.strictEqual(windowRolledOver(end, 18000 - 30, T0 + 60), true);
+    const tracked = trackWindowEnd(end, 18000 - 30, T0 + 60);
+    assert.strictEqual(tracked.rolledOver, true);
+    assert.strictEqual(tracked.endAt, T0 + 18030);
   });
 
   test('a long gap that spans a rollover is still seen', () => {
-    // The review's case: 17000 s left, live data lost, the window rolls over, and data comes
+    // The review's case: 17000 s left, current data lost, the window rolls over, and data comes
     // back 30000 s later with 5000 s left in the new window. Comparing remaining seconds
     // (5000 > 17000 + 3600) missed this; comparing absolute ends does not.
     const end = T0 + 17000;
-    assert.strictEqual(windowRolledOver(end, 5000, T0 + 30000), true);
+    assert.strictEqual(trackWindowEnd(end, 5000, T0 + 30000).rolledOver, true);
   });
 
-  test('a stale window that already ended reads as rolled over once an hour has passed', () => {
-    // resetIn is clamped to 0 after the reset time; the end then tracks "now".
+  test('an observation without a reset time is ignored, however long it lasts', () => {
+    // resetIn 0 means no window end at all — a missing header, or a reset time already passed.
+    // Treating `now + 0` as an end let the estimate creep with the clock and, after an hour,
+    // fire a rollover with nothing behind it, re-arming warnings already shown.
     const end = T0 + 100;
-    assert.strictEqual(windowRolledOver(end, 0, T0 + 100 + 1800), false);
-    assert.strictEqual(windowRolledOver(end, 0, T0 + 100 + 3601), true);
+    let prev: number | null = end;
+    for (const minutes of [10, 30, 61, 240]) {
+      const tracked = trackWindowEnd(prev, 0, T0 + minutes * 60);
+      assert.strictEqual(tracked.rolledOver, false, `${minutes} min of resetIn=0`);
+      assert.strictEqual(tracked.endAt, end, 'the remembered end must not move');
+      prev = tracked.endAt;
+    }
+    // The real rollover still registers once a usable reset time arrives.
+    assert.strictEqual(trackWindowEnd(prev, 18000, T0 + 300 * 60).rolledOver, true);
+  });
+
+  test('nothing is remembered until a usable reset time arrives', () => {
+    assert.deepStrictEqual(trackWindowEnd(null, 0, T0), { rolledOver: false, endAt: null });
   });
 });
