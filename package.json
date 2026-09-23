@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "l10n": "./l10n",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "publisher": "max-riabov",
   "engines": {
     "vscode": "^1.73.0"

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **vscode-claude-status** are documented in this file.
+All notable changes to **Claude Code + GLM — Usage & Cost** (`claude-glm-usage`) are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -8,6 +8,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
 ## [Unreleased]
+
+---
+
+## [1.2.1] — 2026-09-23
 
 ### Fixed
 
@@ -34,6 +38,13 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `claude auth login`; a z.ai user without a key is pointed to `ANTHROPIC_AUTH_TOKEN` instead.
 - The status-bar tooltip labels "Z.AI Usage", "Z.AI / GLM" and "Custom endpoint" were never
   translated; they now are, and a test checks that every runtime string exists in every bundle.
+- **A limit warning replayed an hour into the window.** A rate-limit reading with no reset time
+  (`resetIn = 0`, either because the header was missing or because the reset moment had already
+  passed) was taken for a window boundary at "now", so the tracked boundary crept forward with
+  the clock. About an hour later it crossed the tolerance and read as a fresh window, which
+  replayed the threshold notifications the user had already seen. Such a reading is now ignored
+  outright and the known boundary is kept; a real window change is still detected as soon as a
+  usable reset time arrives.
 
 ---
 
