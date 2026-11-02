@@ -4,21 +4,27 @@ import * as os from 'os';
 import { RateLimitData, QuotaAmounts, QuotaBilling } from './apiClient';
 import { atomicWriteJson } from './atomicWrite';
 
-/** Current on-disk schema. v3 is still accepted for reading — see `validateCacheFile`. */
-const CACHE_VERSION = 4;
+/** Current on-disk schema. v3 and v4 are still accepted for reading — see `validateCacheFile`. */
+const CACHE_VERSION = 5;
 /** `planLevel` is a free-form string from an external API; bound it before it reaches disk. */
 const MAX_LEVEL_LENGTH = 32;
 /** How far in the future an `updatedAt` may sit before the record counts as corrupt. */
 const MAX_FUTURE_SKEW_MS = 5 * 60_000;
+/** SHA-256 hex, the only shape `credentialFingerprint` produces. */
+const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 
 interface CacheFile {
-  version: 3 | 4
+  version: 3 | 4 | 5
   updatedAt: string
   // Which provider produced this rate-limit/quota snapshot. The cache is shared across
   // providers, so a consumer must only reuse it when it matches the active provider —
   // otherwise switching claude-ai ↔ z-ai would surface the other provider's utilization
   // until the TTL expired.
   providerType: string
+  // Which credential produced it (v5+): the quota belongs to the key, so a record written
+  // under another account must not be reused even when the provider matches — see
+  // `cacheMatchesCredential`. Absent on v3/v4 records and when no credential was readable.
+  credentialFingerprint?: string
   usageData: {
     utilization5h: number
     utilization7d: number
@@ -79,22 +85,27 @@ function validateAmounts(v: unknown): QuotaAmounts | null | 'invalid' {
  * field is present and in range, otherwise null — so a tampered or corrupt cache file
  * degrades gracefully to "no data" instead of being trusted.
  *
- * Both v3 and v4 are accepted for reading, and writes are always v4. Rejecting v3 would be
- * fail-closed in the usual good sense, but during an extension update two windows share one
- * cache file: the new one would reject v3 and rewrite v4, the old one would reject v4 and
- * rewrite v3, and both would poll the API on every tick until every window restarted.
+ * Both v3, v4 and v5 are accepted for reading, and writes are always v5. Rejecting older
+ * versions would be fail-closed in the usual good sense, but during an extension update two
+ * windows share one cache file: the new one would reject the old version and rewrite v5,
+ * the old one would reject v5 and rewrite its own, and both would poll the API on every tick
+ * until every window restarted.
  */
 export function validateCacheFile(data: unknown): CacheFile | null {
   if (!data || typeof data !== 'object') { return null; }
   const d = data as Record<string, unknown>;
 
-  if (d.version !== 3 && d.version !== CACHE_VERSION) { return null; } // v1/v2 are rejected
+  if (d.version !== 3 && d.version !== 4 && d.version !== CACHE_VERSION) { return null; } // v1/v2 are rejected
   if (typeof d.updatedAt !== 'string' || isNaN(new Date(d.updatedAt).getTime())) { return null; }
   // A timestamp from the future makes isCacheValid see a negative age, which reads as fresh
   // forever — the data would never be refreshed again. A few minutes of slack absorbs
   // ordinary clock skew; a record from further out is corrupt or tampered.
   if (new Date(d.updatedAt).getTime() > Date.now() + MAX_FUTURE_SKEW_MS) { return null; }
   if (typeof d.providerType !== 'string' || d.providerType.length === 0) { return null; }
+  if (d.credentialFingerprint !== undefined &&
+      (typeof d.credentialFingerprint !== 'string' || !FINGERPRINT_RE.test(d.credentialFingerprint))) {
+    return null;
+  }
 
   const u = d.usageData;
   if (!u || typeof u !== 'object') { return null; }
@@ -131,7 +142,11 @@ export async function readCache(): Promise<CacheFile | null> {
   }
 }
 
-export async function writeCache(data: RateLimitData, providerType: string): Promise<void> {
+export async function writeCache(
+  data: RateLimitData,
+  providerType: string,
+  credentialFingerprint?: string,
+): Promise<void> {
   const nowSec = Date.now() / 1000;
   const usageData: CacheFile['usageData'] = {
     utilization5h: data.utilization5h,
@@ -163,6 +178,12 @@ export async function writeCache(data: RateLimitData, providerType: string): Pro
     version: CACHE_VERSION,
     updatedAt: new Date().toISOString(),
     providerType,
+    // The fingerprint gate mirrors the validator's, for the same reason as the other
+    // optional fields: writing a record readCache discards makes the scheduler see "no
+    // cache" and poll on every tick.
+    ...(typeof credentialFingerprint === 'string' && FINGERPRINT_RE.test(credentialFingerprint)
+      ? { credentialFingerprint }
+      : {}),
     usageData,
   };
 
@@ -190,6 +211,21 @@ export async function writeCache(data: RateLimitData, providerType: string): Pro
 export function isCacheValid(cache: CacheFile, ttlSeconds: number): boolean {
   const age = (Date.now() - new Date(cache.updatedAt).getTime()) / 1000;
   return age < ttlSeconds;
+}
+
+/**
+ * Whether a record may be reused under the given credential. Same reasoning as the
+ * `providerType` match, one level down: a key switch leaves the provider unchanged, and the
+ * old account's quota must not keep rendering as the user's until the TTL expires.
+ *
+ * Both "no fingerprint on record" (v3/v4, or written when no credential was readable) and
+ * "cannot tell now" (null — no readable credential) stay usable: this tightens freshness on
+ * a provable mismatch only, never at the cost of a poll storm when credentials are merely
+ * unreadable.
+ */
+export function cacheMatchesCredential(cache: CacheFile, fingerprint: string | null): boolean {
+  if (cache.credentialFingerprint === undefined || fingerprint === null) { return true; }
+  return cache.credentialFingerprint === fingerprint;
 }
 
 export function getCacheAge(cache: CacheFile): number {

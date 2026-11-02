@@ -2,7 +2,14 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { isCacheValid, getCacheAge, validateCacheFile, writeCache, getCachePath } from '../../data/cache';
+import {
+  isCacheValid,
+  getCacheAge,
+  validateCacheFile,
+  writeCache,
+  getCachePath,
+  cacheMatchesCredential,
+} from '../../data/cache';
 
 // Minimal CacheFile shape for testing (without importing private type).
 // Deliberately still v3: the current reader accepts both 3 and 4, so this fixture doubles as
@@ -239,7 +246,7 @@ suite('Cache schema v4', () => {
       }, 'claude-ai');
       const noWeekly = validateCacheFile(JSON.parse(fs.readFileSync(cachePath, 'utf-8')));
       assert.strictEqual(noWeekly?.usageData.has7dLimit, false);
-      assert.strictEqual(noWeekly?.version, 4, 'writes must always use the current version');
+      assert.strictEqual(noWeekly?.version, 5, 'writes must always use the current version');
 
       await writeCache({
         utilization5h: 0.2, utilization7d: 0.4, resetIn5h: 900, resetIn7d: 86400,
@@ -364,5 +371,90 @@ suite('Cache write-side guards', () => {
       },
     };
     assert.strictEqual(validateCacheFile(record), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schema v5: the credential fingerprint — a key switch is not a provider switch, but the
+// quota belongs to the key all the same.
+// ---------------------------------------------------------------------------
+suite('Cache schema v5 (credential fingerprint)', () => {
+  const FP = 'a'.repeat(64);
+  const OTHER = 'b'.repeat(64);
+  const usage = {
+    utilization5h: 0.2, utilization7d: 0.4,
+    reset5hAt: Date.now() / 1000 + 900, reset7dAt: Date.now() / 1000 + 86400,
+    limitStatus: 'allowed',
+  };
+  const record = (over: Record<string, unknown> = {}): unknown => ({
+    version: 5, updatedAt: new Date().toISOString(), providerType: 'z-ai',
+    ...over,
+    usageData: { ...usage, ...((over.usageData as Record<string, unknown> | undefined) ?? {}) },
+  });
+
+  test('accepts a v5 record with a well-formed fingerprint', () => {
+    const v = validateCacheFile(record({ credentialFingerprint: FP }));
+    assert.ok(v, 'expected the record to validate');
+    assert.strictEqual(v?.credentialFingerprint, FP);
+  });
+
+  test('still accepts v3/v4 records without a fingerprint', () => {
+    // Mixed extension versions share one file during an update — see the v3/v4 note above.
+    assert.ok(validateCacheFile(record({ version: 3 })));
+    assert.ok(validateCacheFile(record({ version: 4 })));
+  });
+
+  test('rejects a malformed fingerprint rather than trusting it', () => {
+    // Not hex, wrong length, not a string: any of these could stand for "some other key"
+    // just as easily as for corruption, and either way the record must not be reused.
+    assert.strictEqual(validateCacheFile(record({ credentialFingerprint: 'z'.repeat(64) })), null);
+    assert.strictEqual(validateCacheFile(record({ credentialFingerprint: 'a'.repeat(63) })), null);
+    assert.strictEqual(validateCacheFile(record({ credentialFingerprint: 42 })), null);
+  });
+
+  test('cacheMatchesCredential decides reuse per credential', () => {
+    const withFp = validateCacheFile(record({ credentialFingerprint: FP }));
+    assert.ok(withFp, 'fixture must validate');
+    if (!withFp) { return; }
+    // Provable mismatch is the only case that invalidates.
+    assert.strictEqual(cacheMatchesCredential(withFp, FP), true, 'same key — reusable');
+    assert.strictEqual(cacheMatchesCredential(withFp, OTHER), false, 'another key — not this account');
+    // "Cannot tell" must never cause a poll storm: unreadable credential now, or a record
+    // from before v5 / from a build that could not fingerprint.
+    assert.strictEqual(cacheMatchesCredential(withFp, null), true);
+    const legacy = validateCacheFile(record({ version: 4 }));
+    assert.ok(legacy);
+    if (legacy) {
+      assert.strictEqual(cacheMatchesCredential(legacy, OTHER), true, 'legacy records carry no fingerprint');
+    }
+  });
+
+  test('writeCache round-trips the fingerprint, and omits it when absent', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-status-fp-'));
+    const previous = process.env['CLAUDE_STATUS_CACHE_PATH'];
+    process.env['CLAUDE_STATUS_CACHE_PATH'] = path.join(dir, 'cache.json');
+    const quota = {
+      utilization5h: 0.2, utilization7d: 0.4, resetIn5h: 900, resetIn7d: 86400,
+      limitStatus: 'allowed' as const, has7dLimit: true,
+    };
+    try {
+      await writeCache(quota, 'z-ai', FP);
+      const written = validateCacheFile(JSON.parse(fs.readFileSync(getCachePath(), 'utf-8')));
+      assert.strictEqual(written?.version, 5);
+      assert.strictEqual(written?.credentialFingerprint, FP);
+
+      // A malformed fingerprint is dropped like any other invalid optional field — the
+      // record itself must still be written.
+      await writeCache(quota, 'z-ai', 'not-a-sha');
+      const dropped = validateCacheFile(JSON.parse(fs.readFileSync(getCachePath(), 'utf-8')));
+      assert.ok(dropped, 'the record survives a bad fingerprint');
+      assert.strictEqual(dropped?.credentialFingerprint, undefined);
+    } finally {
+      try {
+        if (previous === undefined) { delete process.env['CLAUDE_STATUS_CACHE_PATH']; }
+        else { process.env['CLAUDE_STATUS_CACHE_PATH'] = previous; }
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch { /* ignore cleanup failures */ }
+    }
   });
 });

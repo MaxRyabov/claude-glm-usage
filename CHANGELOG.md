@@ -9,6 +9,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A switched GLM/Claude key left the old account's quota on screen after a VS Code restart.**
+  The on-disk cache is keyed by provider only, and the provider does not change when the key
+  does — so the old plan's numbers were shown until the TTL expired, and with no recent JSONL
+  activity the activity gate could hold them indefinitely; only the Refresh button (a forced
+  poll) cut through. The cache schema is now v5 and carries a SHA-256 fingerprint of the
+  credential that produced it: a mismatch reads as "no cache", so the next refresh polls with
+  the current key. Records without a fingerprint (v3/v4, or a credential that cannot be read)
+  keep the old behaviour.
+
 ---
 
 ## [1.2.1] — 2026-09-23
