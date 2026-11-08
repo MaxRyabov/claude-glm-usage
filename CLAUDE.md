@@ -40,7 +40,8 @@ so save input, not output.
   GLM-5.3-Flash. Code-writing subagents stay on the main model.
 - Don't pull full logs/diffs/review summaries into context: file + error tail + line.
   One session per task, not per day.
-- Peak hours ×2: Mon–Fri 09:00–13:00 MSK — don't start heavy autonomous runs there.
+- Peak hours: Mon–Fri 09:00–13:00 MSK credits cost twice the off-peak rate —
+  don't start heavy autonomous runs there.
 - On quota refusal (429/limit): stop and ask, no blind retries.
 
 ---
