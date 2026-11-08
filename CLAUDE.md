@@ -27,6 +27,24 @@ Reference implementation: [claude-tmux-status](https://github.com/long-910/claud
 
 ---
 
+## Working with z.ai GLM (quota discipline)
+
+Claude Code here runs on the z.ai GLM Coding Plan. Credits per turn:
+`(input×6.9 + cachedRead×1.7 + output×24)/10000` (GLM-5.3; Flash is 3× cheaper).
+Cache hits are stable (~97%) — the quota is burned by re-read context volume × turns,
+so save input, not output.
+
+- Default model `glm-5.3` (200k window); `glm-5.3[1m]` only deliberately, for a
+  bounded phase of a task.
+- Cheap roles (code reading, spec recon, digest collection) → Explore subagent /
+  GLM-5.3-Flash. Code-writing subagents stay on the main model.
+- Don't pull full logs/diffs/review summaries into context: file + error tail + line.
+  One session per task, not per day.
+- Peak hours ×2: Mon–Fri 09:00–13:00 MSK — don't start heavy autonomous runs there.
+- On quota refusal (429/limit): stop and ask, no blind retries.
+
+---
+
 ## Architecture
 
 Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing any code.
