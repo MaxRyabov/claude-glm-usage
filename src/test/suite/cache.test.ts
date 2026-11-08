@@ -449,6 +449,12 @@ suite('Cache schema v5 (credential fingerprint)', () => {
       const dropped = validateCacheFile(JSON.parse(fs.readFileSync(getCachePath(), 'utf-8')));
       assert.ok(dropped, 'the record survives a bad fingerprint');
       assert.strictEqual(dropped?.credentialFingerprint, undefined);
+
+      // No third argument at all — the field must be absent from the written record.
+      await writeCache(quota, 'z-ai');
+      const raw = JSON.parse(fs.readFileSync(getCachePath(), 'utf-8')) as Record<string, unknown>;
+      assert.ok(validateCacheFile(raw), 'the record must still validate');
+      assert.ok(!('credentialFingerprint' in raw), 'no fingerprint passed — no field written');
     } finally {
       try {
         if (previous === undefined) { delete process.env['CLAUDE_STATUS_CACHE_PATH']; }
