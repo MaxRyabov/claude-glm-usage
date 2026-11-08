@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
+import { createHash } from 'crypto';
 import { promisify } from 'util';
 import { CredentialRejectedError, QuotaFormatError } from './authBackoff';
 
@@ -105,6 +106,46 @@ export async function readClaudeBaseUrl(claudeDirOverride?: string): Promise<str
 export async function readZaiToken(claudeDirOverride?: string): Promise<string | null> {
   return (await readClaudeEnvVar('ANTHROPIC_AUTH_TOKEN', claudeDirOverride))
     ?? (await readClaudeEnvVar('ANTHROPIC_API_KEY', claudeDirOverride));
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf-8').digest('hex');
+}
+
+/**
+ * A stable, non-reversible id (SHA-256 hex) of the credential a cached quota belongs to.
+ *
+ * The quota belongs to the key, not to the machine: after a key/account switch the provider is
+ * unchanged, so the provider match alone reuses the old plan's numbers until the TTL expires —
+ * and the JSONL-activity gate can hold them alive indefinitely on an idle machine. Comparing
+ * fingerprints lets the cache go invalid the moment the credential changes.
+ *
+ * The credential is re-read on every call (env, then ~/.claude/settings*.json, or the OAuth
+ * file), so a key switched outside VS Code is seen on the next refresh. Null when there is
+ * nothing to fingerprint — a provider without a cached quota, or no readable credential — and
+ * callers must read null as "cannot tell", never as "mismatch".
+ */
+export async function credentialFingerprint(
+  providerType: ClaudeProvider,
+  credPath?: string | null,
+  claudeDirOverride?: string,
+): Promise<string | null> {
+  try {
+    if (providerType === 'z-ai') {
+      const token = await readZaiToken(claudeDirOverride);
+      return token === null ? null : sha256Hex(token);
+    }
+    if (providerType === 'claude-ai') {
+      // File source only: the macOS Keychain fallback would spawn `security` on every refresh
+      // tick just to compute a fingerprint. A keychain-only setup simply gets no fingerprint
+      // (the pre-v5 behaviour) rather than a per-minute subprocess.
+      const creds = await readCredentials(credPath);
+      return creds.source === 'file' ? sha256Hex(creds.token) : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 /**

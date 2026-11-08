@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  classifyBaseUrl, readClaudeBaseUrl, readClaudeEnvVar, readZaiToken, detectProvider,
+  classifyBaseUrl, readClaudeBaseUrl, readClaudeEnvVar, readZaiToken, detectProvider, credentialFingerprint,
   parseZaiQuota, fetchZaiQuota, readZaiEnvelopeFailure, ZaiAuthError,
 } from '../../data/apiClient';
 
@@ -153,6 +153,29 @@ suite('z.ai quota', () => {
     assert.strictEqual(await readZaiToken(tmpDir), 'k-key');
     await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'k-auth', ANTHROPIC_API_KEY: 'k-key' } }));
     assert.strictEqual(await readZaiToken(tmpDir), 'k-auth');
+  });
+
+  test('credentialFingerprint changes with the key and is null without one', async () => {
+    // The defect this pins: a switched GLM key left the old account's quota cached under the
+    // same provider, and the JSONL-activity gate held it alive on an idle machine.
+    const settings = (token: string) =>
+      fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: token } }));
+    await settings('key-one');
+    const fp1 = await credentialFingerprint('z-ai', null, tmpDir);
+    assert.ok(fp1 && /^[0-9a-f]{64}$/.test(fp1), `expected sha-256 hex, got ${fp1}`);
+    // Stable for the same key, different for another — that difference is what invalidates
+    // a cached quota written under the old account.
+    assert.strictEqual(await credentialFingerprint('z-ai', null, tmpDir), fp1);
+    await settings('key-two');
+    const fp2 = await credentialFingerprint('z-ai', null, tmpDir);
+    assert.notStrictEqual(fp2, fp1);
+    // No credential readable → "cannot tell", never a fake fingerprint.
+    await fs.rm(path.join(tmpDir, 'settings.json'), { force: true });
+    assert.strictEqual(await credentialFingerprint('z-ai', null, tmpDir), null);
+    // Providers without a cached quota have nothing to fingerprint.
+    assert.strictEqual(await credentialFingerprint('aws-bedrock', null, tmpDir), null);
+    // claude-ai with an unreadable credPath (here: outside ~/.claude) degrades to null, not a throw.
+    assert.strictEqual(await credentialFingerprint('claude-ai', path.join(tmpDir, 'creds.json')), null);
   });
 
   test('readClaudeEnvVar reads an arbitrary env key from settings.local.json', async () => {

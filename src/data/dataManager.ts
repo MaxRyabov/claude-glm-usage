@@ -9,13 +9,21 @@ import {
   readClaudeBaseUrl,
   readZaiToken,
   detectProvider,
+  credentialFingerprint,
   RateLimitData,
   ClaudeProvider,
   CredentialsUnavailableError,
   QuotaAmounts,
   QuotaBilling,
 } from './apiClient';
-import { readCache, writeCache, isCacheValid, getCacheAge, CacheFile } from './cache';
+import {
+  readCache,
+  writeCache,
+  isCacheValid,
+  getCacheAge,
+  cacheMatchesCredential,
+  CacheFile,
+} from './cache';
 import { acquireApiPollLock, releaseApiPollLock } from './apiLock';
 import { getAllProjectCosts, workspacePathToHash, ProjectCostData } from './projectCost';
 import { computePrediction, PredictionData } from './prediction';
@@ -169,10 +177,18 @@ export class DataManager {
     // Resolve the provider first: it gates the rate-limit call AND drives per-model
     // pricing, so it must be known before reading local usage.
     const [cacheRaw, providerType] = await Promise.all([readCache(), this.resolveProvider()]);
-    // The rate-limit/quota cache is shared on disk but provider-specific: only reuse it
-    // when it was produced by the currently active provider, otherwise a stale claude-ai
-    // cache could surface z.ai's utilization (and vice-versa) until the TTL expired.
-    const cache = cacheRaw && cacheRaw.providerType === providerType ? cacheRaw : null;
+    // The cache is also credential-specific: a record written under another key is another
+    // account's quota, and reusing it shows the old plan after a key switch — the JSONL
+    // gate would then keep it alive for as long as the machine stays idle. A mismatch
+    // reads as "no cache", which polls at the next refresh instead of waiting out the TTL.
+    const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
+    const credential = supportsRateLimit
+      ? await credentialFingerprint(providerType, config.credentialsPath)
+      : null;
+    const cache = cacheRaw
+      && cacheRaw.providerType === providerType
+      && cacheMatchesCredential(cacheRaw, credential)
+      ? cacheRaw : null;
     const localUsage = await readAllUsage(this.pricingContext(providerType));
 
     let rateLimitData: RateLimitData | null = null;
@@ -181,7 +197,6 @@ export class DataManager {
 
     // claude-ai (Anthropic rate-limit headers) and z-ai (quota endpoint) both expose
     // utilization windows; everything else is cost-only.
-    const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
     const hasCostData = localUsage.cost7d > 0 || localUsage.cost5h > 0;
 
     if (supportsRateLimit && config.rateLimitApiEnabled) {
@@ -206,9 +221,14 @@ export class DataManager {
       } else {
         try {
           // Double-check under the lock: another window may have finished its poll
-          // between our cache read and the acquire — its result is already fresh.
+          // between our cache read and the acquire — its result is already fresh. The
+          // credential match applies here too: a record another window wrote under a
+          // different key is not this account's freshness.
           const freshRaw = forceRefresh ? null : await readCache();
-          const fresh = freshRaw && freshRaw.providerType === providerType ? freshRaw : null;
+          const fresh = freshRaw
+            && freshRaw.providerType === providerType
+            && cacheMatchesCredential(freshRaw, credential)
+            ? freshRaw : null;
           if (fresh && isCacheValid(fresh, config.cacheTtlSeconds)) {
             this.dropFailureSupersededBy(fresh, providerType);
             ({ rateLimitData, dataSource } = this.withoutPoll(fresh, providerType, hasCostData));
@@ -216,7 +236,7 @@ export class DataManager {
             rateLimitData = providerType === 'z-ai'
               ? await this.fetchZaiRateLimit()
               : await fetchRateLimitData(config.credentialsPath);
-            await writeCache(rateLimitData, providerType);
+            await writeCache(rateLimitData, providerType, credential ?? undefined);
             this.pollBackoff.clear();
             this.lastFailure = null;
             dataSource = 'api';
