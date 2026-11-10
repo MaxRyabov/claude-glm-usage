@@ -71,7 +71,9 @@ suite('computeContextFill', () => {
       },
     });
 
-  setup(async () => {
+  setup(async function () {
+    // findActiveSession walks the real (possibly large) ~/.claude/projects tree.
+    this.timeout(20_000);
     __resetEntryCacheForTests();
     await fs.mkdir(projectsDir, { recursive: true });
     projDir = path.join(projectsDir, `_ctxfill-test-${Date.now()}-${process.pid}`);
@@ -133,6 +135,43 @@ suite('computeContextFill', () => {
     }
   });
 
+  test('a tiny override window warns proportionally, not on an empty context', async () => {
+    // 8k < the 20k margin: the absolute edge would be negative and light ⚠ on
+    // anything, so the margin caps at 10% of the window (800) → warn at 7_200.
+    const tiny = path.join(projectsDir, `_ctxfill-test-tiny-${Date.now()}-${process.pid}`);
+    await fs.mkdir(tiny, { recursive: true });
+    try {
+      await fs.writeFile(path.join(tiny, 's.jsonl'), line('r-tiny-quiet', 'glm-4.6', 0.5, { input: 7_100 }) + '\n');
+      const quiet = await computeContextFill(tiny, 8_000);
+      assert.ok(quiet);
+      assert.strictEqual(quiet.nearLimit, false, '7_100 < 8_000 − 800 → no warn');
+
+      await fs.writeFile(path.join(tiny, 's2.jsonl'), line('r-tiny-warn', 'glm-4.6', 0.4, { input: 7_200 }) + '\n');
+      const warn = await computeContextFill(tiny, 8_000);
+      assert.ok(warn);
+      assert.strictEqual(warn.usedTokens, 7_200, 'the newest turn wins');
+      assert.strictEqual(warn.nearLimit, true, '7_200 ≥ 8_000 − 800 → warn');
+    } finally {
+      await fs.rm(tiny, { recursive: true, force: true });
+    }
+  });
+
+  test('an explicit freshnessMs narrows the window independently of the default', async () => {
+    const fresh = path.join(projectsDir, `_ctxfill-test-fr-${Date.now()}-${process.pid}`);
+    await fs.mkdir(fresh, { recursive: true });
+    try {
+      // A 3h-old turn: fresh by the 6h default, stale by an explicit 2h window.
+      await fs.writeFile(path.join(fresh, 's.jsonl'), line('r-fr', 'glm-4.6', 3, { input: 10_000 }) + '\n');
+      assert.strictEqual(await computeContextFill(fresh, null, 2 * 3600 * 1000), null,
+        'older than the explicit 2h window');
+      const fill = await computeContextFill(fresh, null, 4 * 3600 * 1000);
+      assert.ok(fill, 'within the explicit 4h window');
+      assert.strictEqual(fill.usedTokens, 10_000);
+    } finally {
+      await fs.rm(fresh, { recursive: true, force: true });
+    }
+  });
+
   test('fillRatio is not clamped: an override below the real fill shows 104%', async () => {
     await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 104_000 }) + '\n');
     const fill = await computeContextFill(projDir, 100_000);
@@ -173,6 +212,7 @@ suite('computeContextFill', () => {
       assert.strictEqual(noModel, null, 'a fresh session without a model cannot resolve a window');
 
       await fs.writeFile(path.join(staleDir, 's.jsonl'), line('r-stale', 'glm-4.6', 7, { input: 1_000 }) + '\n');
+      // Exercises the 6h default on purpose — the explicit window has its own test.
       assert.strictEqual(await computeContextFill(staleDir, null), null, 'last turn older than 6h');
     } finally {
       await fs.rm(staleDir, { recursive: true, force: true });

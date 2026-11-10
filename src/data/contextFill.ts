@@ -60,7 +60,7 @@ export interface ContextFill {
   usedTokens: number
   /** usedTokens / windowTokens, NOT clamped: an override below the real fill shows 104%. */
   fillRatio: number
-  /** usedTokens reached window − CONTEXT_WARN_MARGIN_TOKENS (⚠ threshold). */
+  /** usedTokens reached the ⚠ threshold: window − min(CONTEXT_WARN_MARGIN_TOKENS, 10% of the window). */
   nearLimit: boolean
 }
 
@@ -79,11 +79,16 @@ export async function computeContextFill(
   const windowTokens = resolveContextWindow(session.model, maxTokensOverride);
   const u = session.usage;
   const usedTokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  // On a window smaller than the margin (reachable only via the override — every
+  // built-in window is ≥ 200k) an absolute 20k edge would sit below zero and light ⚠
+  // even on an empty context. Cap the margin at 10% of the window, which is exactly
+  // what 20k is on the 200k default.
+  const warnMargin = Math.min(CONTEXT_WARN_MARGIN_TOKENS, Math.floor(windowTokens / 10));
   return {
     model: session.model,
     windowTokens,
     usedTokens,
     fillRatio: usedTokens / windowTokens,
-    nearLimit: usedTokens >= windowTokens - CONTEXT_WARN_MARGIN_TOKENS,
+    nearLimit: usedTokens >= windowTokens - warnMargin,
   };
 }
