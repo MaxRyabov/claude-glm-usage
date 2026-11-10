@@ -322,4 +322,20 @@ suite('EntryCache subagents walk', () => {
     assert.ok(!byReal(all, weirdSub), 'a *.jsonl-named directory inside subagents/ stays out');
     assert.ok(byReal(all, agent), 'real subagent file still discovered');
   });
+
+  test('a dangling *.jsonl symlink is dropped, not passed on the lexical path', async function () {
+    // realpath of a dangling symlink rejects — the fail-closed branch of pushSafeFile.
+    const dangling = path.join(projDir, 'dangling.jsonl');
+    try {
+      await fs.symlink(path.join(projDir, 'no-such-target.jsonl'), dangling, 'file');
+    } catch {
+      this.skip();   // symlink privileges absent
+      return;
+    }
+    await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1') + '\n');
+
+    const all = await discoverFiles();
+    assert.ok(!byReal(all, dangling), 'dangling symlink must not enter the file list');
+    assert.ok(byReal(all, path.join(projDir, 's.jsonl')), 'real session file still discovered');
+  });
 });

@@ -334,10 +334,10 @@ async function collectSessionSigs(dirs: { p: string; m: number }[]): Promise<Ses
   return sigs;
 }
 
-/** realpath + isSafePath gate shared by top-level and subagent files. */
+/** realpath + isSafePath gate shared by top-level and subagent files (M-3, fail closed). */
 async function pushSafeFile(files: string[], filePath: string): Promise<void> {
-  let realPath = filePath;
-  try { realPath = await fs.realpath(realPath); } catch { /* fall back to lexical */ }
+  let realPath: string;
+  try { realPath = await fs.realpath(filePath); } catch { return; }   // vanished or unreadable → drop
   if (isSafePath(realPath)) { files.push(realPath); }
 }
 
@@ -358,6 +358,9 @@ async function walkAll(): Promise<string[]> {
     } catch { return null; }
   }));
   const dirs = dirStats.filter((d): d is { p: string; m: number } => d !== null);
+  // readdir order is not guaranteed: sort so dirSig is stable across calls (a re-ordered
+  // listing must not invalidate walkCache) — sessionSigs is sorted for the same reason.
+  dirs.sort((a, b) => (a.p < b.p ? -1 : 1));
 
   // Signature changes when a session file is added/removed/renamed (dir mtime), the set
   // of project dirs changes, or anything moves inside a session subtree (session and
