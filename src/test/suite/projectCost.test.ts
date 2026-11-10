@@ -66,7 +66,9 @@ suite('ProjectCost', () => {
         line('r-claude', 'claude-sonnet-5-5', now),
       ].join('\n'));
 
-      const result = await getProjectCostForDir(dir, 'demo');
+      // One frozen clock for the fixtures, the manual recalc and the aggregation —
+      // rules out the local-midnight race between manual() and the internal todayStart.
+      const result = await getProjectCostForDir(dir, 'demo', {}, now);
       const nowCredits = manual(now);
       const oldCredits = manual(now - 30 * HOUR);
 
@@ -86,7 +88,7 @@ suite('ProjectCost', () => {
           line('r-now', 'glm-4.6', now),
           line('r-30h', 'glm-4.6', now - 30 * HOUR),
         ].join('\n'));
-        const solo = await getProjectCostForDir(soloDir, 'solo');
+        const solo = await getProjectCostForDir(soloDir, 'solo', {}, now);
         assert.ok(result.costToday > solo.costToday, 'the claude turn contributes USD cost');
       } finally {
         await fs.rm(soloDir, { recursive: true, force: true });
@@ -125,7 +127,7 @@ suite('ProjectCost', () => {
         line('r-off', offTs),
       ].join('\n'));
 
-      const result = await getProjectCostForDir(dir, 'demo');
+      const result = await getProjectCostForDir(dir, 'demo', {}, Date.now());
       assert.ok(Math.abs(result.credits7d - (base + base * 0.5)) < 1e-9,
         `peak turn at full price + off-peak at half = ${base * 1.5}, got ${result.credits7d}`);
     });

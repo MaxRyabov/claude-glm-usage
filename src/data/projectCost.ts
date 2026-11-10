@@ -83,9 +83,15 @@ export async function workspacePathToProjectDir(workspacePath: string): Promise<
   return null;
 }
 
-export async function getProjectCostForDir(projectDir: string, projectName: string, ctx: PricingContext = {}): Promise<ProjectCostData> {
-  const now = Date.now();
-  const todayStart = new Date();
+export async function getProjectCostForDir(
+  projectDir: string,
+  projectName: string,
+  ctx: PricingContext = {},
+  /** Frozen clock for tests — one moment for the fixtures, the manual recalc and the windows. */
+  now: number = Date.now(),
+): Promise<ProjectCostData> {
+  // Local-midnight boundary derives from the same frozen moment — see the `now` param.
+  const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
   const w7d = 7 * 24 * 3600 * 1000;
   const w30d = 30 * 24 * 3600 * 1000;

@@ -208,6 +208,9 @@ export class DataManager {
       && cacheRaw.providerType === providerType
       && cacheMatchesCredential(cacheRaw, credential)
       ? cacheRaw : null;
+    // Context fill depends on neither the local usage read nor the quota poll — start it
+    // in parallel so its project-dir mapping adds nothing to the refresh latency.
+    const contextPromise = this.computeContextFill();
     const localUsage = await readAllUsage(this.pricingContext(providerType));
 
     let rateLimitData: RateLimitData | null = null;
@@ -300,7 +303,7 @@ export class DataManager {
     // Volatile per-refresh fields: peak hours (z-ai only) and the workspace's active
     // session context fill. Both are recomputed every refresh and never persisted.
     const peak = peakStatus(new Date(), providerType);
-    const context = await this.computeContextFill();
+    const context = await contextPromise;
 
     // Rename the local credit windows: the quota-side credits5h/credits7d (QuotaAmounts)
     // must keep their names, so the local numbers land as localCredits*.
