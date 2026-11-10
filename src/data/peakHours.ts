@@ -60,10 +60,10 @@ function localTimeLabel(date: Date, timeZone?: string): string {
   }).format(date);
 }
 
-function tzLabelOf(timeZone?: string): string {
+function tzLabelOf(at: Date, timeZone?: string): string {
   const parts = new Intl.DateTimeFormat('en', {
     timeZone, timeZoneName: 'shortOffset',
-  }).formatToParts(new Date());
+  }).formatToParts(at);
   const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
   return name.replace(/^GMT/, 'UTC');   // "GMT+3" → "UTC+3"
 }
@@ -82,6 +82,8 @@ export function peakStatus(now: Date, providerType: string, timeZone?: string): 
     windowEndMs,
     windowStartLocal: localTimeLabel(new Date(windowStartMs), timeZone),
     windowEndLocal: localTimeLabel(new Date(windowEndMs), timeZone),
-    tzLabel: tzLabelOf(timeZone),
+    // Offset label of the window moment, not of "now": a DST shift between now and the
+    // (possibly next-weekday) window would otherwise mislabel the local times above.
+    tzLabel: tzLabelOf(new Date(windowStartMs), timeZone),
   };
 }

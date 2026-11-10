@@ -423,6 +423,7 @@ function lastNonSynthetic(rec: FileCacheEntry | undefined): ActiveSessionInfo | 
     return rec.last;
   }
   rec.last = null;   // scanned — remember the absence so we never rescan per tick
+  dirty = true;      // …and keep the null sentinel across restarts too
   return null;
 }
 
@@ -438,9 +439,12 @@ export async function findActiveSession(
   now: number = Date.now(),
 ): Promise<ActiveSessionInfo | null> {
   if (!isSafePath(path.join(projectDir, 'probe'))) { return null; }
-  let names: string[];
-  try { names = await fs.readdir(projectDir); } catch { return null; }
-  const jsonl = names.filter((n) => n.endsWith('.jsonl')).map((n) => path.join(projectDir, n));
+  let entries: Dirent[];
+  try { entries = await fs.readdir(projectDir, { withFileTypes: true }); } catch { return null; }
+  // isFile() keeps a *directory* named like *.jsonl out (same guard as the walk).
+  const jsonl = entries
+    .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
+    .map((e) => path.join(projectDir, e.name));
   if (jsonl.length === 0) { return null; }
 
   // Same realpath + isSafePath gate as the walk (M-3): a symlinked jsonl file — or a

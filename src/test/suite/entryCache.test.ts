@@ -205,6 +205,7 @@ suite('EntryCache findActiveSession', () => {
     try {
       await fs.symlink(victim, link, 'file');
     } catch {
+      await fs.rm(victimDir, { recursive: true, force: true });   // no leak on skip
       this.skip();
       return;
     }
@@ -220,7 +221,7 @@ suite('EntryCache findActiveSession', () => {
   });
 
   test('a dir outside ~/.claude/projects is rejected defensively', async () => {
-    const outside = path.join(os.tmpdir(), `entrycache-outside-${Date.now()}`);
+    const outside = path.join(os.tmpdir(), `entrycache-outside-${Date.now()}-${process.pid}`);
     await fs.mkdir(outside, { recursive: true });
     try {
       await fs.writeFile(path.join(outside, 's.jsonl'), line('r1') + '\n');
@@ -284,7 +285,7 @@ suite('EntryCache subagents walk', () => {
     await fs.writeFile(second, line('r2') + '\n');
     // Creating a file bumps the subagents dir mtime, but pin it explicitly so the test
     // never depends on filesystem timestamp granularity.
-    const bump = new Date(Date.now() / 1000 + 2);
+    const bump = new Date(Date.now() + 2_000);
     await fs.utimes(subDir, bump, bump);
 
     all = await discoverFiles();
