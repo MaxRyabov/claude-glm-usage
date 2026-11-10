@@ -4,6 +4,8 @@ import * as os from 'os';
 import * as vscode from 'vscode';
 import { calculateCost, PricingContext, createPricingResolver } from './pricing';
 import { loadEntries } from './entryCache';
+import { creditsForEntry } from './credits';
+import { isPeakAt } from './peakHours';
 
 export interface ProjectCostData {
   projectName: string
@@ -11,6 +13,10 @@ export interface ProjectCostData {
   costToday: number
   cost7d: number
   cost30d: number
+  // z.ai credits for the same windows, same pass (GLM turns only, off-peak ×0.5).
+  creditsToday: number
+  credits7d: number
+  credits30d: number
   sessionCount: number
   lastActive: Date
 }
@@ -87,6 +93,9 @@ export async function getProjectCostForDir(projectDir: string, projectName: stri
   let costToday = 0;
   let cost7d = 0;
   let cost30d = 0;
+  let creditsToday = 0;
+  let credits7d = 0;
+  let credits30d = 0;
   let sessionCount = 0;
   let lastActiveMs = 0;
 
@@ -102,11 +111,12 @@ export async function getProjectCostForDir(projectDir: string, projectName: stri
     for (const entry of entries) {
       const tsMs = entry.timestamp;
       const cost = calculateCost(entry.usage, priceFor(entry.model));
+      const credits = creditsForEntry(entry, isPeakAt(tsMs));
       const ageMs = now - tsMs;
 
-      if (ageMs < w30d) { cost30d += cost; }
-      if (ageMs < w7d) { cost7d += cost; }
-      if (tsMs >= todayStart.getTime()) { costToday += cost; }
+      if (ageMs < w30d) { cost30d += cost; credits30d += credits; }
+      if (ageMs < w7d) { cost7d += cost; credits7d += credits; }
+      if (tsMs >= todayStart.getTime()) { costToday += cost; creditsToday += credits; }
       if (tsMs > lastActiveMs) { lastActiveMs = tsMs; }
     }
   } catch {
@@ -121,6 +131,9 @@ export async function getProjectCostForDir(projectDir: string, projectName: stri
     costToday,
     cost7d,
     cost30d,
+    creditsToday,
+    credits7d,
+    credits30d,
     sessionCount,
     lastActive: lastActive ?? new Date(0),
   };

@@ -12,6 +12,7 @@ function makeUsage(): ClaudeUsageData {
   return {
     utilization5h: 0.5, utilization7d: 0.3, resetIn5h: 1800, resetIn7d: 86400,
     limitStatus: 'allowed', cost5h: 1.23, costDay: 4.56, cost7d: 7.89,
+    localCredits5h: 2.5, localCreditsDay: 9.0, localCredits7d: 15.5,
     tokensIn5h: 100, tokensOut5h: 50, tokensCacheRead5h: 0, tokensCacheCreate5h: 0,
     has7dLimit: true, providerType: 'claude-ai',
     lastUpdated: new Date('2026-01-01T00:00:00.000Z'), cacheAge: 0, dataSource: 'api',
@@ -42,6 +43,7 @@ suite('snapshotCache', () => {
       usage: makeUsage(),
       projectCosts: [{
         projectName: 'demo', projectPath: '/tmp/demo', costToday: 1, cost7d: 2, cost30d: 3,
+        creditsToday: 0.5, credits7d: 1.5, credits30d: 2.5,
         sessionCount: 4, lastActive: new Date('2026-01-02T00:00:00.000Z'),
       }],
       heatmap: { daily: [], hourly: [], generatedAt: new Date('2026-01-03T00:00:00.000Z') },
@@ -69,5 +71,28 @@ suite('snapshotCache', () => {
     const file = { version: 1, savedAt: new Date().toISOString(), usage, projectCosts: [], heatmap: null };
     await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
     assert.strictEqual(await readSnapshot(), null);
+  });
+
+  maybe('strips the volatile peak and context fields before persisting', async () => {
+    const usage = makeUsage();
+    usage.peak = {
+      active: true, windowStartMs: 1_762_000_000_000, windowEndMs: 1_762_014_400_000,
+      windowStartLocal: '09:00', windowEndLocal: '13:00', tzLabel: 'UTC+3',
+    };
+    usage.context = {
+      model: 'glm-4.6', windowTokens: 200_000, usedTokens: 76_000, fillRatio: 0.38, nearLimit: false,
+    };
+    await writeSnapshot({ usage, projectCosts: [], heatmap: null });
+
+    const raw = JSON.parse(await fsp.readFile(snapshotPath, 'utf-8')) as Record<string, unknown>;
+    const stored = raw.usage as Record<string, unknown>;
+    assert.ok(!('peak' in stored), 'peak is per-refresh state and must not reach the disk');
+    assert.ok(!('context' in stored), 'context is per-refresh state and must not reach the disk');
+    assert.strictEqual(stored.localCredits5h, 2.5, 'the persisted credit windows survive the strip');
+
+    const back = await readSnapshot();
+    assert.ok(back);
+    assert.strictEqual(back.usage.peak, undefined);
+    assert.strictEqual(back.usage.context, undefined);
   });
 });

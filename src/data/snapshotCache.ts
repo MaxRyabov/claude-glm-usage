@@ -30,10 +30,15 @@ function getSnapshotPath(): string {
 }
 
 export async function writeSnapshot(snapshot: DashboardSnapshot): Promise<void> {
+  // peak and context are volatile: the first goes stale within minutes, the second
+  // recomputes from the parse cache instantly — neither belongs in the snapshot. Stripped
+  // here, at the format owner, so no caller can persist them by accident.
+  const { peak, context, ...usage } = snapshot.usage;
+  void peak; void context;
   const file: SnapshotFile = {
     version: SNAPSHOT_VERSION,
     savedAt: new Date().toISOString(),
-    usage: snapshot.usage,
+    usage,
     projectCosts: snapshot.projectCosts,
     heatmap: snapshot.heatmap,
   };

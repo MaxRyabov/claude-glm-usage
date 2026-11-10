@@ -25,12 +25,14 @@ import {
   CacheFile,
 } from './cache';
 import { acquireApiPollLock, releaseApiPollLock } from './apiLock';
-import { getAllProjectCosts, workspacePathToHash, ProjectCostData } from './projectCost';
+import { getAllProjectCosts, workspacePathToHash, workspacePathToProjectDir, ProjectCostData } from './projectCost';
 import { computePrediction, PredictionData } from './prediction';
 import { getHeatmapData as computeHeatmapData, HeatmapData } from '../webview/heatmap';
 import { loadPersistedCache, persistCache } from './entryCache';
 import { readSnapshot, writeSnapshot } from './snapshotCache';
 import { PollBackoff } from './authBackoff';
+import { peakStatus, PeakStatus } from './peakHours';
+import { computeContextFill, readContextOverride, ContextFill } from './contextFill';
 import {
   DataSource,
   PollNotice,
@@ -42,6 +44,7 @@ import {
   supersededByCache,
   activeNotice,
   showsRateData,
+  actsOnRateData,
   snapshotDataSource,
 } from './pollOutcome';
 import { config } from '../config';
@@ -60,6 +63,11 @@ export interface ClaudeUsageData {
   cost5h: number
   costDay: number
   cost7d: number
+  // z.ai credits for the same local windows (GLM turns only). Named localCredits* so
+  // the quota-side QuotaAmounts fields (credits5h/credits7d) keep their names.
+  localCredits5h: number
+  localCreditsDay: number
+  localCredits7d: number
   tokensIn5h: number
   tokensOut5h: number
   tokensCacheRead5h: number
@@ -75,6 +83,12 @@ export interface ClaudeUsageData {
   planLevel?: string
   credits5h?: QuotaAmounts
   credits7d?: QuotaAmounts
+
+  // Volatile per-refresh fields — recomputed cheaply, never persisted to the snapshot.
+  // peak: only for the z-ai plan (null for everyone else). context: the workspace's
+  // active session fill, absent when there is no fresh session.
+  peak?: PeakStatus
+  context?: ContextFill
 
   // Metadata
   lastUpdated: Date
@@ -278,6 +292,20 @@ export class DataManager {
 
     const cacheAge = cache ? getCacheAge(cache) : 0;
 
+    // Volatile per-refresh fields: peak hours (z-ai only) and the workspace's active
+    // session context fill. Both are recomputed every refresh and never persisted.
+    const peak = peakStatus(new Date(), providerType);
+    const context = await this.computeContextFill();
+
+    // Rename the local credit windows: the quota-side credits5h/credits7d (QuotaAmounts)
+    // must keep their names, so the local numbers land as localCredits*.
+    const {
+      credits5h: localCredits5h,
+      creditsDay: localCreditsDay,
+      credits7d: localCredits7d,
+      ...localRest
+    } = localUsage;
+
     const data: ClaudeUsageData = {
       utilization5h: rateLimitData?.utilization5h ?? 0,
       utilization7d: rateLimitData?.utilization7d ?? 0,
@@ -292,7 +320,12 @@ export class DataManager {
       ...(rateLimitData?.planLevel !== undefined ? { planLevel: rateLimitData.planLevel } : {}),
       ...(rateLimitData?.credits5h !== undefined ? { credits5h: rateLimitData.credits5h } : {}),
       ...(rateLimitData?.credits7d !== undefined ? { credits7d: rateLimitData.credits7d } : {}),
-      ...localUsage,
+      ...localRest,
+      localCredits5h,
+      localCreditsDay,
+      localCredits7d,
+      ...(peak !== null ? { peak } : {}),
+      ...(context !== null ? { context } : {}),
       lastUpdated: new Date(),
       cacheAge,
       dataSource,
@@ -388,6 +421,23 @@ export class DataManager {
     return this.lastProjectCosts;
   }
 
+  /**
+   * Context fill of the current workspace's active session: map the first workspace
+   * folder to its ~/.claude/projects dir and read the cached last turn. Null when the
+   * workspace has no project or no fresh (< 6h) session — the segment then hides.
+   */
+  private async computeContextFill(): Promise<ContextFill | null> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) { return null; }
+    try {
+      const projectDir = await workspacePathToProjectDir(folder.uri.fsPath);
+      const override = await readContextOverride();
+      return await computeContextFill(projectDir, override);
+    } catch {
+      return null;
+    }
+  }
+
   async refresh(): Promise<void> {
     return this.enqueueRefresh('normal');
   }
@@ -440,6 +490,7 @@ export class DataManager {
 
   private async saveStateToDisk(): Promise<void> {
     if (this.lastData) {
+      // writeSnapshot strips the volatile peak/context fields before persisting.
       await writeSnapshot({
         usage: this.lastData,
         projectCosts: this.lastProjectCosts,
@@ -521,14 +572,23 @@ export class DataManager {
     if (!this.lastData) { return null; }
     // Utilization from an old cache behind a refused key must not predict an exhaustion time.
     const live = showsRateData(this.lastData.providerType, this.lastData.dataSource);
+    // Credit forecast from the quota's absolute amounts is stricter: acting on a stale
+    // remainder would announce an exhaustion the live quota no longer has (actsOnRateData
+    // excludes 'stale', showsRateData does not).
+    const liveQuota = actsOnRateData(this.lastData.providerType, this.lastData.dataSource);
     try {
-      const prediction = await computePrediction(
-        live ? this.lastData.utilization5h : 0,
-        live ? this.lastData.resetIn5h : 0,
-        this.lastData.cost5h,
-        this.lastData.costDay,
-        config.dailyBudget,
-      );
+      const prediction = await computePrediction({
+        utilization5h: live ? this.lastData.utilization5h : 0,
+        resetIn5h: live ? this.lastData.resetIn5h : 0,
+        // The utilization fallback estimates capacity from the window spend in the
+        // utilization unit: credits for z-ai, USD for everyone else.
+        spend5h: this.lastData.providerType === 'z-ai' ? this.lastData.localCredits5h : this.lastData.cost5h,
+        costToday: this.lastData.costDay,
+        dailyBudget: config.dailyBudget,
+        quotaCredits: this.lastData.providerType === 'z-ai' && liveQuota
+          ? this.lastData.credits5h ?? null
+          : null,
+      });
       this.lastPrediction = prediction;
       return prediction;
     } catch {
