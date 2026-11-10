@@ -4,8 +4,10 @@
 // (input × m.input + cache_read × m.cacheRead + output × m.output) / 10000 credits,
 // with the multiplier set by the model tier and halved outside peak hours
 // (weekdays 06:00–10:00 UTC — see peakHours.ts). cache_creation is not billed
-// separately: z.ai folds cache writes into the input term. Only GLM-family models
-// are billed in credits; claude-* and unknown models contribute nothing.
+// separately: z.ai folds cache writes into the input term. Billing follows the spec
+// filter (design.md): a model is billed when its name contains "glm" or "flash"
+// (the GLM family, including flash tiers); claude-* and unknown models contribute
+// nothing.
 import { TokenUsage } from './pricing';
 
 export interface CreditMultipliers {
