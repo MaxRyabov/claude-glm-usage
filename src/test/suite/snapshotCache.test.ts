@@ -73,6 +73,23 @@ suite('snapshotCache', () => {
     assert.strictEqual(await readSnapshot(), null);
   });
 
+  maybe('defaults missing localCredits* fields from an older snapshot', async () => {
+    // A v1 snapshot written before PR #18 has no localCredits* — the fields must read
+    // as 0, not undefined, or the z-ai forecast gets NaN spend5h before the first refresh.
+    const usage = makeUsage() as unknown as Record<string, unknown>;
+    delete usage.localCredits5h;
+    delete usage.localCreditsDay;
+    delete usage.localCredits7d;
+    const file = { version: 1, savedAt: new Date().toISOString(), usage, projectCosts: [], heatmap: null };
+    await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
+
+    const back = await readSnapshot();
+    assert.ok(back, 'older snapshot still reads (defaults fill the gap)');
+    assert.strictEqual(back.usage.localCredits5h, 0);
+    assert.strictEqual(back.usage.localCreditsDay, 0);
+    assert.strictEqual(back.usage.localCredits7d, 0);
+  });
+
   maybe('strips the volatile peak and context fields before persisting', async () => {
     const usage = makeUsage();
     usage.peak = {

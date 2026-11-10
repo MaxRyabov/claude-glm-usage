@@ -72,6 +72,12 @@ export async function readSnapshot(): Promise<DashboardSnapshot | null> {
 
     const usage: ClaudeUsageData = {
       ...file.usage,
+      // Window-credit fields added after the first release default to 0: a snapshot
+      // written by an older version must not leak undefined into spend5h (NaN forecast)
+      // during the gap between loadFromDisk and the first live refresh.
+      localCredits5h: file.usage.localCredits5h ?? 0,
+      localCreditsDay: file.usage.localCreditsDay ?? 0,
+      localCredits7d: file.usage.localCredits7d ?? 0,
       lastUpdated: reviveDate(file.usage.lastUpdated) ?? new Date(0),
     };
     const projectCosts = Array.isArray(file.projectCosts)

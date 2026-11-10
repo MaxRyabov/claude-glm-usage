@@ -151,6 +151,11 @@ export class DataManager {
   private watcherTimer: ReturnType<typeof setTimeout> | undefined;
   private diskLoaded = false;
 
+  // CLAUDE_CODE_MAX_CONTEXT_TOKENS rarely changes but reading it touches env + up to two
+  // settings files — and computeContextFill runs on every refresh, watcher ticks included.
+  private contextOverrideCache: { value: number | null; at: number } | null = null;
+  private readonly contextOverrideTtlMs = 5 * 60 * 1000;
+
   // Multi-window damping. Every VSCode window runs its own instance of this extension,
   // and each watches the whole ~/.claude/projects tree — so one long Claude Code session
   // used to fan out into continuous re-parse + multi-MB cache rewrites in EVERY window.
@@ -431,11 +436,22 @@ export class DataManager {
     if (!folder) { return null; }
     try {
       const projectDir = await workspacePathToProjectDir(folder.uri.fsPath);
-      const override = await readContextOverride();
+      const override = await this.readContextOverrideCached();
       return await computeContextFill(projectDir, override);
     } catch {
       return null;
     }
+  }
+
+  /** readContextOverride behind a short TTL cache — it sits on the hot refresh path. */
+  private async readContextOverrideCached(): Promise<number | null> {
+    const now = Date.now();
+    if (this.contextOverrideCache && now - this.contextOverrideCache.at < this.contextOverrideTtlMs) {
+      return this.contextOverrideCache.value;
+    }
+    const value = await readContextOverride();
+    this.contextOverrideCache = { value, at: now };
+    return value;
   }
 
   async refresh(): Promise<void> {

@@ -76,8 +76,58 @@ suite('ProjectCost', () => {
         `credits7d: both GLM turns, got ${result.credits7d}`);
       assert.ok(Math.abs(result.credits30d - (nowCredits + oldCredits)) < 1e-9,
         `credits30d: both GLM turns, got ${result.credits30d}`);
-      // The claude turn still costs dollars — units must not get mixed up.
-      assert.ok(result.costToday > 0, 'USD cost of the claude turn is present');
+
+      // Same two GLM turns without the claude record: the USD delta is exactly the
+      // claude turn's cost — proving it is priced in dollars while earning no credits.
+      const soloDir = path.join(os.tmpdir(), `projcost-solo-${Date.now()}-${Math.floor(performance.now())}`);
+      await fs.mkdir(soloDir, { recursive: true });
+      try {
+        await fs.writeFile(path.join(soloDir, 'session.jsonl'), [
+          line('r-now', 'glm-4.6', now),
+          line('r-30h', 'glm-4.6', now - 30 * HOUR),
+        ].join('\n'));
+        const solo = await getProjectCostForDir(soloDir, 'solo');
+        assert.ok(result.costToday > solo.costToday, 'the claude turn contributes USD cost');
+      } finally {
+        await fs.rm(soloDir, { recursive: true, force: true });
+      }
+    });
+
+    test('the peak factor follows each record timestamp, not the current moment', async () => {
+      // Two fixed moments on deliberately different peak statuses: the last past
+      // Tuesday 07:30 UTC (inside the window) and the last past Sunday 12:00 UTC
+      // (outside). Both are guaranteed < 7d old, so the 7d aggregate must equal
+      // base × 1 + base × 0.5 with the factors written out by hand.
+      const lastUtcMoment = (dow: number, hh: number, mm: number): number => {
+        const d = new Date();
+        d.setUTCHours(hh, mm, 0, 0);
+        let back = (d.getUTCDay() - dow + 7) % 7;
+        if (back === 0 && d.getTime() > Date.now()) { back = 7; }
+        d.setUTCDate(d.getUTCDate() - back);
+        return d.getTime();
+      };
+      const peakTs = lastUtcMoment(2, 7, 30);    // Tuesday, inside 06:00–10:00 UTC
+      const offTs = lastUtcMoment(0, 12, 0);     // Sunday, always off-peak
+      assert.ok(Date.now() - peakTs < 7 * 24 * 3600 * 1000, 'helper stays inside the 7d window');
+      assert.ok(Date.now() - offTs < 7 * 24 * 3600 * 1000, 'helper stays inside the 7d window');
+
+      const usage = {
+        input_tokens: 100_000, output_tokens: 50_000,
+        cache_read_input_tokens: 200_000, cache_creation_input_tokens: 0,
+      };
+      const base = (100_000 * 6.9 + 200_000 * 1.7 + 50_000 * 24) / 10_000;   // 223 §
+      const line = (rid: string, ts: number) => JSON.stringify({
+        type: 'assistant', uuid: `${rid}-u`, timestamp: new Date(ts).toISOString(), requestId: rid,
+        message: { id: `m_${rid}`, model: 'glm-4.6', usage },
+      });
+      await fs.writeFile(path.join(dir, 'session.jsonl'), [
+        line('r-peak', peakTs),
+        line('r-off', offTs),
+      ].join('\n'));
+
+      const result = await getProjectCostForDir(dir, 'demo');
+      assert.ok(Math.abs(result.credits7d - (base + base * 0.5)) < 1e-9,
+        `peak turn at full price + off-peak at half = ${base * 1.5}, got ${result.credits7d}`);
     });
   });
 
