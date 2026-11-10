@@ -149,6 +149,19 @@ suite('Prediction', () => {
       assert.strictEqual(p.creditsRemaining5h, 1000, 'remainder still reported');
     });
 
+    test('a spent quota (zero remaining) reads as rate-limit-reached, not "10 min left"', () => {
+      // remaining absent → total − used = 0: the quota is exhausted right now, and the
+      // forecast must say so instead of "Less than 10 min remaining".
+      const p = predictFromTurns(baseInput({
+        utilization5h: 0.97,
+        quotaCredits: { used: 100_000, total: 100_000 },
+      }), turns());
+      assert.strictEqual(p.recommendationKey, 'rate-limit-reached');
+      assert.strictEqual(p.estimatedExhaustionIn, 0);
+      assert.strictEqual(p.creditsRemaining5h, 0);
+      assert.strictEqual(p.safeToStartHeavyTask, false);
+    });
+
     test('utilization already at 100% wins over the quota path', () => {
       const p = predictFromTurns(baseInput({
         utilization5h: 1.0,

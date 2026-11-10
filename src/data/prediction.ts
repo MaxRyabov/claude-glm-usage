@@ -149,7 +149,15 @@ export function predictFromTurns(input: PredictionInput, turns: ReadonlyArray<Ti
     recommendationKey = 'rate-limit-reached';
   } else if (quotaCredits) {
     creditsRemaining5h = quotaCreditsRemaining(quotaCredits);
-    if (burnRateCreditsPerHour > 0) {
+    if (creditsRemaining5h <= 0) {
+      // Quota spent right now — the same state the utilization ≥ 1 branch describes,
+      // so the same semantics: the limit is reached, not "less than 10 min remaining".
+      estimatedExhaustionTime = new Date();
+      estimatedExhaustionIn = 0;
+      safeToStartHeavyTask = false;
+      recommendation = 'Rate limit reached. Wait for reset.';
+      recommendationKey = 'rate-limit-reached';
+    } else if (burnRateCreditsPerHour > 0) {
       const secondsUntilExhaustion = (creditsRemaining5h / burnRateCreditsPerHour) * 3600;
       if (secondsUntilExhaustion >= resetIn5h) {
         // The window survives until the reset — say exactly that instead of a time.

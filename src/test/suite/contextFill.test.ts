@@ -112,6 +112,25 @@ suite('computeContextFill', () => {
     }
   });
 
+  test('nearLimit boundary is inclusive: exactly window − 20k warns, one token less does not', async () => {
+    const edge = path.join(projectsDir, `_ctxfill-test-edge-${Date.now()}-${process.pid}`);
+    const below = path.join(projectsDir, `_ctxfill-test-below-${Date.now()}-${process.pid}`);
+    await fs.mkdir(edge, { recursive: true });
+    await fs.mkdir(below, { recursive: true });
+    try {
+      await fs.writeFile(path.join(edge, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 180_000 }) + '\n');
+      await fs.writeFile(path.join(below, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 179_999 }) + '\n');
+      const atEdge = await computeContextFill(edge, null);
+      const oneBelow = await computeContextFill(below, null);
+      assert.ok(atEdge && oneBelow, 'both fresh sessions expected');
+      assert.strictEqual(atEdge.nearLimit, true, '180_000 = 200k − 20k is already near the limit (>=)');
+      assert.strictEqual(oneBelow.nearLimit, false, '179_999 is below the margin');
+    } finally {
+      await fs.rm(edge, { recursive: true, force: true });
+      await fs.rm(below, { recursive: true, force: true });
+    }
+  });
+
   test('fillRatio is not clamped: an override below the real fill shows 104%', async () => {
     await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 104_000 }) + '\n');
     const fill = await computeContextFill(projDir, 100_000);
