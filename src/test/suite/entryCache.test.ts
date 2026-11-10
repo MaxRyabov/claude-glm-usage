@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { loadEntries, discoverFiles, getClaudeProjectsDir, __resetEntryCacheForTests } from '../../data/entryCache';
+import { loadEntries, discoverFiles, findActiveSession, getClaudeProjectsDir, __resetEntryCacheForTests } from '../../data/entryCache';
 
 const usage = { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 const line = (rid: string, opts: { model?: string; ts?: string } = {}): string => JSON.stringify({
@@ -11,6 +11,7 @@ const line = (rid: string, opts: { model?: string; ts?: string } = {}): string =
   requestId: rid,
   message: { id: `m_${rid}`, model: opts.model ?? 'claude-sonnet-4-6', usage },
 });
+const HOUR = 3600 * 1000;
 
 suite('EntryCache', () => {
   let file: string;
@@ -84,7 +85,9 @@ suite('EntryCache discovery', () => {
   const projectsDir = getClaudeProjectsDir();
   let projDir: string;
 
-  setup(async () => {
+  setup(async function () {
+    // discoverFiles rescans the real (possibly large) ~/.claude/projects tree.
+    this.timeout(20_000);
     __resetEntryCacheForTests();
     await fs.mkdir(projectsDir, { recursive: true });
     projDir = path.join(projectsDir, `_entrycache-test-${Date.now()}-${process.pid}`);
@@ -111,5 +114,150 @@ suite('EntryCache discovery', () => {
     const recent = await discoverFiles(Date.now() - 30 * 60 * 1000);
     assert.ok(recent.some((p) => path.resolve(p) === path.resolve(b)), 'recent window keeps b.jsonl');
     assert.ok(!recent.some((p) => path.resolve(p) === path.resolve(a)), 'recent window drops the 2h-old a.jsonl');
+  });
+});
+
+suite('EntryCache findActiveSession', () => {
+  const projectsDir = getClaudeProjectsDir();
+  let projDir: string;
+  // Freeze each timestamp once: recomputing Date.now() after the write races the clock.
+  const at = (hoursAgo: number): { iso: string; ms: number } => {
+    const ms = Date.now() - hoursAgo * HOUR;
+    return { iso: new Date(ms).toISOString(), ms };
+  };
+
+  setup(async () => {
+    __resetEntryCacheForTests();
+    await fs.mkdir(projectsDir, { recursive: true });
+    projDir = path.join(projectsDir, `_entrycache-test-${Date.now()}-${process.pid}`);
+    await fs.mkdir(projDir, { recursive: true });
+  });
+  teardown(async () => { try { await fs.rm(projDir, { recursive: true, force: true }); } catch { /* ignore */ } });
+
+  test('the latest top-level session of the project wins', async () => {
+    const old = at(2);
+    const fresh = at(0.5);
+    await fs.writeFile(path.join(projDir, 's-old.jsonl'), line('r1', { ts: old.iso }) + '\n');
+    await fs.writeFile(path.join(projDir, 's-new.jsonl'), line('r2', { ts: fresh.iso }) + '\n');
+    const active = await findActiveSession(projDir);
+    assert.ok(active, 'fresh session expected');
+    assert.strictEqual(active.timestamp, fresh.ms);
+  });
+
+  test('a staler session in another project never wins', async () => {
+    const otherDir = path.join(projectsDir, `_entrycache-test-other-${Date.now()}-${process.pid}`);
+    await fs.mkdir(otherDir, { recursive: true });
+    try {
+      // A much newer turn exists — but in a different project dir.
+      const foreign = at(0.1);
+      const mine = at(1);
+      await fs.writeFile(path.join(otherDir, 'x.jsonl'), line('r-other', { ts: foreign.iso }) + '\n');
+      await fs.writeFile(path.join(projDir, 's.jsonl'), line('r-mine', { ts: mine.iso }) + '\n');
+      const active = await findActiveSession(projDir);
+      assert.ok(active);
+      assert.strictEqual(active.timestamp, mine.ms, 'the other project turn must not leak in');
+    } finally {
+      await fs.rm(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a session older than the freshness window is discarded', async () => {
+    const stale = at(7);
+    await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1', { ts: stale.iso }) + '\n');
+    assert.strictEqual(await findActiveSession(projDir, 6 * HOUR), null, '7h-old last turn is stale');
+  });
+
+  test('a trailing synthetic record does not shadow the real last turn', async () => {
+    const real = at(1);
+    const synthetic = at(0.5);
+    await fs.writeFile(
+      path.join(projDir, 's.jsonl'),
+      [line('r1', { ts: real.iso }), line('r2', { model: '<synthetic>', ts: synthetic.iso })].join('\n') + '\n',
+    );
+    const active = await findActiveSession(projDir);
+    assert.ok(active);
+    assert.strictEqual(active.timestamp, real.ms, 'synthetic tail is skipped');
+  });
+
+  test('a dir outside ~/.claude/projects is rejected defensively', async () => {
+    const outside = path.join(os.tmpdir(), `entrycache-outside-${Date.now()}`);
+    await fs.mkdir(outside, { recursive: true });
+    try {
+      await fs.writeFile(path.join(outside, 's.jsonl'), line('r1') + '\n');
+      assert.strictEqual(await findActiveSession(outside), null);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+suite('EntryCache subagents walk', () => {
+  const projectsDir = getClaudeProjectsDir();
+  let projDir: string;
+  let subDir: string;
+  const byReal = (list: string[], p: string): boolean =>
+    list.some((x) => path.resolve(x) === path.resolve(p));
+
+  setup(async function () {
+    // discoverFiles rescans the real ~/.claude/projects tree (hundreds of files) whenever
+    // a test mutates it — realpath on Windows alone can exceed the 2s default.
+    this.timeout(20_000);
+    __resetEntryCacheForTests();
+    await fs.mkdir(projectsDir, { recursive: true });
+    projDir = path.join(projectsDir, `_entrycache-test-${Date.now()}-${process.pid}`);
+    subDir = path.join(projDir, '11111111-2222-3333-4444-555555555555', 'subagents');
+    await fs.mkdir(subDir, { recursive: true });
+  });
+  teardown(async () => { try { await fs.rm(projDir, { recursive: true, force: true }); } catch { /* ignore */ } });
+
+  test('subagent files join the walk/aggregates but not sessions or findActiveSession', async () => {
+    const session = path.join(projDir, '11111111-2222-3333-4444-555555555555.jsonl');
+    const agent = path.join(subDir, 'agent-aaaaaaaaaaaaaaaa.jsonl');
+    // Subagent turn is newer than the top-level one (timestamps frozen once).
+    const topTs = Date.now() - HOUR;
+    const subTs = Date.now();
+    await fs.writeFile(session, line('r-top', { ts: new Date(topTs).toISOString() }) + '\n');
+    await fs.writeFile(agent, line('r-sub', { ts: new Date(subTs).toISOString() }) + '\n');
+
+    const all = await discoverFiles();
+    assert.ok(byReal(all, session), 'top-level session file discovered');
+    assert.ok(byReal(all, agent), 'subagent file discovered');
+
+    const entries = await loadEntries(
+      all.filter((p) => path.resolve(p) === path.resolve(session) || path.resolve(p) === path.resolve(agent)),
+    );
+    assert.strictEqual(entries.length, 2, 'both turns land in the shared aggregates');
+
+    // Active session: only top-level files — the newer subagent turn must not win.
+    const active = await findActiveSession(projDir);
+    assert.ok(active);
+    assert.strictEqual(active.timestamp, topTs);
+  });
+
+  test('a subagent file created after the first walk is discovered (dirSig includes subagents mtime)', async () => {
+    const first = path.join(subDir, 'agent-first.jsonl');
+    await fs.writeFile(first, line('r1') + '\n');
+    let all = await discoverFiles();
+    assert.ok(byReal(all, first));
+
+    const second = path.join(subDir, 'agent-second.jsonl');
+    await fs.writeFile(second, line('r2') + '\n');
+    // Creating a file bumps the subagents dir mtime, but pin it explicitly so the test
+    // never depends on filesystem timestamp granularity.
+    const bump = new Date(Date.now() / 1000 + 2);
+    await fs.utimes(subDir, bump, bump);
+
+    all = await discoverFiles();
+    assert.ok(byReal(all, second), 'file created after the cached walk enters the aggregates');
+  });
+
+  test('deeper workflow logs (subagents/workflows/…) are not walked — no full recursion', async () => {
+    const wfDir = path.join(subDir, 'workflows', 'wf_test');
+    await fs.mkdir(wfDir, { recursive: true });
+    const deep = path.join(wfDir, 'agent-deep.jsonl');
+    await fs.writeFile(deep, line('r-deep') + '\n');
+
+    const all = await discoverFiles();
+    assert.ok(!byReal(all, deep), 'workflow-level agent files stay out of the walk');
   });
 });

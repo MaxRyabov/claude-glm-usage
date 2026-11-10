@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import { Dirent } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { TokenUsage } from './pricing';
@@ -35,6 +36,11 @@ interface FileCacheEntry {
   offset: number          // byte offset up to which complete lines have been parsed
   entries: UsageEntry[]
   seenIds: Set<string>    // dedupe keys (requestId ?? message.id) already counted
+  // Last non-synthetic record, maintained incrementally on every parse so
+  // findActiveSession never re-scans the whole entry list per refresh tick.
+  // Undefined only for a persisted cache from before this field existed (backfilled
+  // once from entries on first read).
+  last?: UsageEntry
 }
 
 // ---- module state -----------------------------------------------------------
@@ -161,6 +167,16 @@ async function readSlice(filePath: string, offset: number, length: number): Prom
   }
 }
 
+/** Track the newest non-synthetic entry appended at [fromIdx, entries.length). */
+function refreshLast(rec: FileCacheEntry, fromIdx: number): void {
+  // Lines are chronological within a file, so >= keeps the later of equal timestamps.
+  for (let i = fromIdx; i < rec.entries.length; i++) {
+    const e = rec.entries[i];
+    if (e.model === '<synthetic>') { continue; }
+    if (!rec.last || e.timestamp >= rec.last.timestamp) { rec.last = { ...e }; }
+  }
+}
+
 async function parseFull(filePath: string, mtimeMs: number, size: number): Promise<FileCacheEntry> {
   const entries: UsageEntry[] = [];
   const seenIds = new Set<string>();
@@ -172,6 +188,7 @@ async function parseFull(filePath: string, mtimeMs: number, size: number): Promi
     // unreadable — cache an empty record so we don't retry every cycle until it changes
   }
   const record: FileCacheEntry = { mtimeMs, size, offset, entries, seenIds };
+  refreshLast(record, 0);
   cache.set(filePath, record);
   dirty = true;
   return record;
@@ -183,12 +200,14 @@ async function parseIncremental(
   size: number,
   cached: FileCacheEntry,
 ): Promise<FileCacheEntry> {
+  const before = cached.entries.length;
   try {
     const chunk = await readSlice(filePath, cached.offset, size - cached.offset);
     cached.offset = await ingest(cached.offset, chunk, cached.seenIds, cached.entries);
   } catch {
     // read failed — keep prior entries, just refresh stat below
   }
+  refreshLast(cached, before);
   cached.mtimeMs = mtimeMs;
   cached.size = size;
   dirty = true;
@@ -257,10 +276,13 @@ async function doLoadOne(filePath: string): Promise<UsageEntry[]> {
 }
 
 /**
- * Discover JSONL session files under ~/.claude/projects/. The directory walk is reused
- * while the tree's signature (projects dir + subdirectory mtimes) is unchanged, so an
- * unchanged tree skips the re-walk. When `minMtimeMs` is given, files are stat-filtered
- * to that window (stat is cheap relative to read+parse).
+ * Discover JSONL session files under ~/.claude/projects/: top-level session files plus
+ * subagent logs at <session>/subagents/*.jsonl (cost aggregates must see them; session
+ * counting and the active session use top-level files only, which is why the walk list
+ * is a superset and consumers filter by depth). The directory walk is reused while the
+ * tree's signature is unchanged, so an unchanged tree skips the re-walk. When
+ * `minMtimeMs` is given, files are stat-filtered to that window (stat is cheap relative
+ * to read+parse).
  */
 export async function discoverFiles(minMtimeMs?: number): Promise<string[]> {
   const all = await walkAll();
@@ -272,6 +294,46 @@ export async function discoverFiles(minMtimeMs?: number): Promise<string[]> {
   return stats
     .filter((s): s is { p: string; m: number } => s !== null && s.m >= minMtimeMs)
     .map((s) => s.p);
+}
+
+/** Per-session directory signature: session dir mtime + its subagents/ mtime (null when absent). */
+interface SessionSig {
+  p: string
+  m: number
+  sub: number | null
+}
+
+/**
+ * Cheap pre-check inputs for the session subtrees: stat of every session directory and
+ * every existing subagents/ inside it. Creating a file inside an existing subagents/
+ * changes only that directory's mtime — without it in the walk signature the cached walk
+ * would silently keep serving a stale file list (top-level dir mtimes stay untouched).
+ */
+async function collectSessionSigs(dirs: { p: string; m: number }[]): Promise<SessionSig[]> {
+  const sigs: SessionSig[] = [];
+  await Promise.all(dirs.map(async (dir) => {
+    let entries: Dirent[];
+    try { entries = await fs.readdir(dir.p, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) { continue; }
+      const sessionPath = path.join(dir.p, entry.name);
+      try {
+        const m = (await fs.stat(sessionPath)).mtimeMs;
+        let sub: number | null = null;
+        try { sub = (await fs.stat(path.join(sessionPath, 'subagents'))).mtimeMs; } catch { /* none */ }
+        sigs.push({ p: sessionPath, m, sub });
+      } catch { /* session vanished between readdir and stat */ }
+    }
+  }));
+  sigs.sort((a, b) => (a.p < b.p ? -1 : 1));
+  return sigs;
+}
+
+/** realpath + isSafePath gate shared by top-level and subagent files. */
+async function pushSafeFile(files: string[], filePath: string): Promise<void> {
+  let realPath = filePath;
+  try { realPath = await fs.realpath(realPath); } catch { /* fall back to lexical */ }
+  if (isSafePath(realPath)) { files.push(realPath); }
 }
 
 async function walkAll(): Promise<string[]> {
@@ -292,27 +354,90 @@ async function walkAll(): Promise<string[]> {
   }));
   const dirs = dirStats.filter((d): d is { p: string; m: number } => d !== null);
 
-  // Signature changes when a session file is added/removed/renamed (dir mtime) or the
-  // set of project dirs changes — the cheap rescan pre-check.
-  const dirSig = JSON.stringify([rootMtime, dirs.map((d) => [d.p, d.m])]);
+  // Signature changes when a session file is added/removed/renamed (dir mtime), the set
+  // of project dirs changes, or anything moves inside a session subtree (session and
+  // subagents dir mtimes) — the cheap rescan pre-check.
+  const sessionSigs = await collectSessionSigs(dirs);
+  const dirSig = JSON.stringify([rootMtime, dirs.map((d) => [d.p, d.m]), sessionSigs]);
   if (walkCache && walkCache.dirSig === dirSig) {
     return walkCache.files;
   }
 
   const files: string[] = [];
   await Promise.all(dirs.map(async (dir) => {
-    let entries: string[];
-    try { entries = await fs.readdir(dir.p); } catch { return; }
+    let entries: Dirent[];
+    try { entries = await fs.readdir(dir.p, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
-      if (!entry.endsWith('.jsonl')) { continue; }
-      let realPath = path.join(dir.p, entry);
-      try { realPath = await fs.realpath(realPath); } catch { /* fall back to lexical */ }
-      if (isSafePath(realPath)) { files.push(realPath); }
+      if (entry.name.endsWith('.jsonl')) {
+        // Top-level session file (same suffix-only semantics as before).
+        await pushSafeFile(files, path.join(dir.p, entry.name));
+      } else if (entry.isDirectory()) {
+        // Subagent logs: <session>/subagents/*.jsonl — one fixed level, no full recursion.
+        const subDir = path.join(dir.p, entry.name, 'subagents');
+        let subEntries: string[];
+        try { subEntries = await fs.readdir(subDir); } catch { continue; }
+        for (const name of subEntries) {
+          if (name.endsWith('.jsonl')) { await pushSafeFile(files, path.join(subDir, name)); }
+        }
+      }
     }
   }));
 
   walkCache = { dirSig, files };
   return files;
+}
+
+// ---- active session ------------------------------------------------------------
+
+/** Spec freshness for the workspace's active session: the last turn must be < 6h old. */
+export const ACTIVE_SESSION_FRESHNESS_MS = 6 * 3600 * 1000;
+
+export interface ActiveSessionInfo {
+  timestamp: number
+  model?: string
+  usage: TokenUsage
+}
+
+/** Cached `last` with a one-shot backfill for persisted records predating the field. */
+function lastNonSynthetic(rec: FileCacheEntry | undefined): ActiveSessionInfo | null {
+  if (!rec) { return null; }
+  if (rec.last) { return rec.last; }
+  for (let i = rec.entries.length - 1; i >= 0; i--) {
+    const e = rec.entries[i];
+    if (e.model === '<synthetic>') { continue; }
+    rec.last = { ...e };
+    dirty = true;   // keep the backfill across restarts
+    return rec.last;
+  }
+  return null;
+}
+
+/**
+ * The workspace project's active session: the newest non-synthetic record across the
+ * project dir's TOP-LEVEL jsonl files (subagent logs are skipped — they are not
+ * sessions). Returns null when the dir has no files, nothing fresh enough, or the dir
+ * lies outside ~/.claude/projects (defensive: callers pass a mapped workspace path).
+ */
+export async function findActiveSession(
+  projectDir: string,
+  freshnessMs: number = ACTIVE_SESSION_FRESHNESS_MS,
+  now: number = Date.now(),
+): Promise<ActiveSessionInfo | null> {
+  if (!isSafePath(path.join(projectDir, 'probe'))) { return null; }
+  let names: string[];
+  try { names = await fs.readdir(projectDir); } catch { return null; }
+  const files = names.filter((n) => n.endsWith('.jsonl')).map((n) => path.join(projectDir, n));
+  if (files.length === 0) { return null; }
+
+  await loadEntries(files);   // warm the parse cache (shared with all other consumers)
+
+  let best: ActiveSessionInfo | null = null;
+  for (const f of files) {
+    const last = lastNonSynthetic(cache.get(f));
+    if (last && (!best || last.timestamp > best.timestamp)) { best = last; }
+  }
+  if (!best || best.timestamp < now - freshnessMs) { return null; }
+  return best;
 }
 
 // ---- disk persistence -------------------------------------------------------
@@ -323,6 +448,7 @@ interface PersistedFile {
   offset: number
   entries: UsageEntry[]
   ids: string[]
+  last?: UsageEntry
 }
 interface PersistedCache {
   version: number
@@ -350,12 +476,15 @@ export async function loadPersistedCache(): Promise<void> {
       const entries = rec.entries.filter(
         (e) => e && typeof e.timestamp === 'number' && isValidUsage((e as UsageEntry).usage),
       ) as UsageEntry[];
+      const last = (rec.last && typeof rec.last.timestamp === 'number'
+        && isValidUsage(rec.last.usage)) ? rec.last : undefined;   // old caches: backfill later
       cache.set(filePath, {
         mtimeMs: rec.mtimeMs,
         size: rec.size,
         offset: rec.offset,
         entries,
         seenIds: new Set(Array.isArray(rec.ids) ? rec.ids : []),
+        last,
       });
     }
   } catch {
@@ -380,6 +509,7 @@ export async function persistCache(maxAgeMs: number): Promise<void> {
       offset: rec.offset,
       entries: rec.entries,
       ids: Array.from(rec.seenIds),
+      last: rec.last,
     };
   }
   // Cleared before the await so a mutation racing the write re-arms the flag.
