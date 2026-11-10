@@ -1,4 +1,5 @@
-import { calculateCost } from './jsonlReader';
+import { calculateCost, PricingContext } from './jsonlReader';
+import { createPricingResolver } from './pricing';
 import { discoverFiles, loadEntries } from './entryCache';
 import { creditsForEntry } from './credits';
 import { isPeakAt } from './peakHours';
@@ -38,7 +39,7 @@ export interface TimestampedTurn {
   credits: number    // z.ai credits (0 for non-GLM turns)
 }
 
-async function readRecentTurns(windowMs: number): Promise<TimestampedTurn[]> {
+async function readRecentTurns(windowMs: number, ctx: PricingContext = {}): Promise<TimestampedTurn[]> {
   const now = Date.now();
   const cutoff = now - windowMs;
   const result: TimestampedTurn[] = [];
@@ -48,9 +49,12 @@ async function readRecentTurns(windowMs: number): Promise<TimestampedTurn[]> {
   // their GLM turns count towards the burn rate too.
   const files = await discoverFiles(cutoff);
   const entries = await loadEntries(files);
+  // Per-model pricing, same as every other aggregate: the USD burn rate of GLM turns
+  // must follow the GLM price list, not the claude default.
+  const priceFor = createPricingResolver(ctx);
   for (const entry of entries) {
     if (entry.timestamp < cutoff) { continue; }
-    const cost = calculateCost(entry.usage);
+    const cost = calculateCost(entry.usage, priceFor(entry.model));
     const credits = creditsForEntry(entry, isPeakAt(entry.timestamp));
     if (cost > 0 || credits > 0) {
       result.push({ timestamp: entry.timestamp, cost, credits });
@@ -103,12 +107,20 @@ export interface PredictionInput {
   costToday: number   // USD, for the budget path
   dailyBudget: number | null
   /**
+   * Unit of spend5h — and therefore of the burn rate the utilization fallback divides
+   * by. 'credits' for z-ai (spend5h = locally counted window credits), 'usd' (default)
+   * for everyone else. Mixing units silently produces a meaningless time.
+   */
+  fallbackUnit?: 'usd' | 'credits'
+  /**
    * Live z.ai quota with absolute credit amounts, when available. The credit
    * exhaustion forecast is built only from it; null → the utilization fallback below.
    * Callers must pass it only for data current enough to act on (actsOnRateData):
    * a stale remainder must not drive a forecast.
    */
   quotaCredits?: QuotaAmounts | null
+  /** Per-model pricing context for the USD burn rate (same resolver as the aggregates). */
+  pricingCtx?: PricingContext
 }
 
 /** Remaining credits of the 5h quota: `remaining` as reported (conservative), else total − used. */
@@ -117,7 +129,7 @@ export function quotaCreditsRemaining(quota: QuotaAmounts): number {
 }
 
 export async function computePrediction(input: PredictionInput): Promise<PredictionData> {
-  const turns = await readRecentTurns(30 * 60 * 1000);
+  const turns = await readRecentTurns(30 * 60 * 1000, input.pricingCtx);
   return predictFromTurns(input, turns);
 }
 
@@ -128,9 +140,12 @@ export async function computePrediction(input: PredictionInput): Promise<Predict
  * ~/.claude/projects happens to hold during the test run.
  */
 export function predictFromTurns(input: PredictionInput, turns: ReadonlyArray<TimestampedTurn>): PredictionData {
-  const { utilization5h, resetIn5h, spend5h, costToday, dailyBudget, quotaCredits = null } = input;
+  const { utilization5h, resetIn5h, spend5h, costToday, dailyBudget, fallbackUnit = 'usd', quotaCredits = null } = input;
   const burnRateUsdPerHour = calculateBurnRate(turns);
   const burnRateCreditsPerHour = calculateCreditsBurnRate(turns);
+  // The utilization fallback divides by the burn rate in spend5h's own unit — credits
+  // for z-ai, USD for everyone else; credits ÷ (USD/h) is a meaningless time.
+  const fallbackBurnRate = fallbackUnit === 'credits' ? burnRateCreditsPerHour : burnRateUsdPerHour;
 
   // --- Rate limit exhaustion ---
   let estimatedExhaustionTime: Date | null = null;
@@ -176,11 +191,11 @@ export function predictFromTurns(input: PredictionInput, turns: ReadonlyArray<Ti
       }
     }
     // Zero credits burn (no turns in the window) → no exhaustion forecast at all.
-  } else if (burnRateUsdPerHour > 0 && utilization5h > 0) {
+  } else if (fallbackBurnRate > 0 && utilization5h > 0) {
     // Estimate total capacity: spend5h corresponds to utilization5h fraction used
     const estimatedCapacity = spend5h / utilization5h;
     const remaining = estimatedCapacity * (1.0 - utilization5h);
-    const hoursUntilExhaustion = remaining / burnRateUsdPerHour;
+    const hoursUntilExhaustion = remaining / fallbackBurnRate;
     const secondsUntilExhaustion = hoursUntilExhaustion * 3600;
     // Cap at reset time — exhaustion can't be after the window resets
     const effectiveSeconds = Math.min(secondsUntilExhaustion, resetIn5h);

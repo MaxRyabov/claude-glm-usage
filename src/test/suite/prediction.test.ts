@@ -184,6 +184,16 @@ suite('Prediction', () => {
       assert.strictEqual(p.recommendationKey, 'critical');
     });
 
+    test('z-ai token tariff: credits spend divided by the credits burn rate', () => {
+      // spend5h is in credits here (localCredits5h): 230 § at util 0.5 → capacity 460 §,
+      // remaining 230 § at ≈4000 §/h → ≈207s. Dividing by the USD rate instead would
+      // give a ~5,000× wrong time.
+      const p = predictFromTurns(baseInput({ fallbackUnit: 'credits', spend5h: 230 }), turns());
+      assert.ok(p.estimatedExhaustionIn !== null && Math.abs(p.estimatedExhaustionIn - 207) < 5,
+        `expected ≈207s, got ${p.estimatedExhaustionIn}`);
+      assert.strictEqual(p.recommendationKey, 'critical');
+    });
+
     test('no turns in the window → no exhaustion time, safe default', () => {
       const p = predictFromTurns(baseInput({}), []);
       assert.strictEqual(p.currentBurnRate, 0);

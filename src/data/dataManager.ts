@@ -583,11 +583,15 @@ export class DataManager {
         // The utilization fallback estimates capacity from the window spend in the
         // utilization unit: credits for z-ai, USD for everyone else.
         spend5h: this.lastData.providerType === 'z-ai' ? this.lastData.localCredits5h : this.lastData.cost5h,
+        fallbackUnit: this.lastData.providerType === 'z-ai' ? 'credits' : 'usd',
         costToday: this.lastData.costDay,
         dailyBudget: config.dailyBudget,
         quotaCredits: this.lastData.providerType === 'z-ai' && liveQuota
           ? this.lastData.credits5h ?? null
           : null,
+        // Per-model pricing for the USD burn rate — the same resolver every other
+        // aggregate uses, so GLM turns are priced as GLM, not by the claude default.
+        pricingCtx: this.pricingContext(this.lastData.providerType),
       });
       this.lastPrediction = prediction;
       return prediction;

@@ -158,20 +158,23 @@ suite('computeContextFill', () => {
   test('returns null without a project dir, for a stale session, or with no model', async () => {
     assert.strictEqual(await computeContextFill(null, null), null, 'no project dir');
 
-    await fs.writeFile(path.join(projDir, 'stale.jsonl'), line('r1', 'glm-4.6', 7, { input: 1_000 }) + '\n');
+    // Each cause gets its own clean dir with its own requestId, so every assertion
+    // fails for exactly the reason its message claims.
     const staleDir = path.join(projectsDir, `_ctxfill-test-stale-${Date.now()}-${process.pid}`);
+    const noModelDir = path.join(projectsDir, `_ctxfill-test-nomodel-${Date.now()}-${process.pid}`);
     await fs.mkdir(staleDir, { recursive: true });
+    await fs.mkdir(noModelDir, { recursive: true });
     try {
-      await fs.writeFile(path.join(staleDir, 's.jsonl'), line('r1', 'glm-4.6', 7, { input: 1_000 }) + '\n');
+      // Fresh enough timestamp, but no model on the turn — the window is unresolvable.
+      await fs.writeFile(path.join(noModelDir, 's.jsonl'), line('r-nomodel', undefined, 0.5, { input: 1_000 }) + '\n');
+      const noModel: ContextFill | null = await computeContextFill(noModelDir, null);
+      assert.strictEqual(noModel, null, 'a fresh session without a model cannot resolve a window');
+
+      await fs.writeFile(path.join(staleDir, 's.jsonl'), line('r-stale', 'glm-4.6', 7, { input: 1_000 }) + '\n');
       assert.strictEqual(await computeContextFill(staleDir, null), null, 'last turn older than 6h');
     } finally {
       await fs.rm(staleDir, { recursive: true, force: true });
+      await fs.rm(noModelDir, { recursive: true, force: true });
     }
-
-    // A turn without a model can't resolve a window — no context segment.
-    assert.strictEqual(await computeContextFill(projDir, null), null, 'stale project dir has nothing fresh');
-    await fs.writeFile(path.join(projDir, 'nomodel.jsonl'), line('r1', undefined, 0.5, { input: 1_000 }) + '\n');
-    const noModel: ContextFill | null = await computeContextFill(projDir, null);
-    assert.strictEqual(noModel, null, 'session without a model yields null');
   });
 });
