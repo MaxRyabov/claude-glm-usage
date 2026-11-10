@@ -55,15 +55,26 @@ function nearestWindowStart(now: Date): number {
 
 function localTimeLabel(date: Date, timeZone?: string): string {
   // en-GB + hour12:false gives a stable "HH:MM" 24-hour label for every locale.
-  return new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit', minute: '2-digit', hour12: false, timeZone,
-  }).format(date);
+  // An invalid timeZone (user config is free text) falls back to the machine zone
+  // instead of throwing RangeError out of peakStatus.
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit', minute: '2-digit', hour12: false, timeZone,
+    }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(date);
+  }
 }
 
 function tzLabelOf(at: Date, timeZone?: string): string {
-  const parts = new Intl.DateTimeFormat('en', {
-    timeZone, timeZoneName: 'shortOffset',
-  }).formatToParts(at);
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en', { timeZone, timeZoneName: 'shortOffset' }).formatToParts(at);
+  } catch {
+    parts = new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' }).formatToParts(at);
+  }
   const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
   return name.replace(/^GMT/, 'UTC');   // "GMT+3" → "UTC+3"
 }

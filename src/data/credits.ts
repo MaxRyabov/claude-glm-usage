@@ -43,9 +43,10 @@ export interface CreditEntry {
 }
 
 /**
- * Credits charged for one assistant turn. `peakActive` must reflect the turn's own
- * timestamp (isPeakAt(entry.timestamp)), not the current moment — an off-peak turn
- * stays half-price after the window closes. Non-GLM turns cost 0 credits.
+ * Credits charged for one assistant turn. `peakActive` must be computed from the
+ * turn's own timestamp — isPeakAt(turn.timestamp) on the UsageEntry this record
+ * came from — not the current moment: an off-peak turn stays half-price after the
+ * window closes. Non-GLM turns cost 0 credits.
  */
 export function creditsForEntry(entry: CreditEntry, peakActive: boolean): number {
   if (!isCreditModel(entry.model)) { return 0; }
