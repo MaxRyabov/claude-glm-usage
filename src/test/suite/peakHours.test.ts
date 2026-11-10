@@ -75,6 +75,7 @@ suite('peakStatus', () => {
     const st = peakStatus(MON(7), 'z-ai');
     assert.ok(st);
     assert.match(st.windowStartLocal, /^\d{2}:\d{2}$/);
-    assert.match(st.tzLabel, /^UTC[+-]\d/);
+    // On a UTC machine shortOffset is just "UTC" (no ±N suffix) — both are valid.
+    assert.match(st.tzLabel, /^UTC([+-]\d+)?$/);
   });
 });

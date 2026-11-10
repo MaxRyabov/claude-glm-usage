@@ -38,9 +38,10 @@ interface FileCacheEntry {
   seenIds: Set<string>    // dedupe keys (requestId ?? message.id) already counted
   // Last non-synthetic record, maintained incrementally on every parse so
   // findActiveSession never re-scans the whole entry list per refresh tick.
-  // Undefined only for a persisted cache from before this field existed (backfilled
-  // once from entries on first read).
-  last?: UsageEntry
+  // null = "scanned, nothing non-synthetic" (a synthetic-only file must not re-scan
+  // either); undefined only for a persisted cache from before this field existed
+  // (backfilled once from entries on first read).
+  last?: UsageEntry | null
 }
 
 // ---- module state -----------------------------------------------------------
@@ -175,6 +176,7 @@ function refreshLast(rec: FileCacheEntry, fromIdx: number): void {
     if (e.model === '<synthetic>') { continue; }
     if (!rec.last || e.timestamp >= rec.last.timestamp) { rec.last = { ...e }; }
   }
+  if (rec.last === undefined) { rec.last = null; }   // scanned — nothing non-synthetic
 }
 
 async function parseFull(filePath: string, mtimeMs: number, size: number): Promise<FileCacheEntry> {
@@ -368,10 +370,7 @@ async function walkAll(): Promise<string[]> {
     let entries: Dirent[];
     try { entries = await fs.readdir(dir.p, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
-      if (entry.name.endsWith('.jsonl')) {
-        // Top-level session file (same suffix-only semantics as before).
-        await pushSafeFile(files, path.join(dir.p, entry.name));
-      } else if (entry.isDirectory()) {
+      if (entry.isDirectory()) {
         // Subagent logs: <session>/subagents/*.jsonl — one fixed level, no full recursion.
         const subDir = path.join(dir.p, entry.name, 'subagents');
         let subEntries: string[];
@@ -379,6 +378,11 @@ async function walkAll(): Promise<string[]> {
         for (const name of subEntries) {
           if (name.endsWith('.jsonl')) { await pushSafeFile(files, path.join(subDir, name)); }
         }
+      } else if (entry.name.endsWith('.jsonl')) {
+        // Top-level session file; the isDirectory() check above keeps a *directory*
+        // named like *.jsonl out of the file list (readFile on it would fail anyway,
+        // but it must not even reach the parse cache).
+        await pushSafeFile(files, path.join(dir.p, entry.name));
       }
     }
   }));
@@ -398,10 +402,14 @@ export interface ActiveSessionInfo {
   usage: TokenUsage
 }
 
-/** Cached `last` with a one-shot backfill for persisted records predating the field. */
+/**
+ * Cached `last` with a one-shot backfill for persisted records predating the field.
+ * `last === null` is the "scanned, nothing non-synthetic" sentinel — it skips the
+ * rescan for synthetic-only files just like a found record does.
+ */
 function lastNonSynthetic(rec: FileCacheEntry | undefined): ActiveSessionInfo | null {
   if (!rec) { return null; }
-  if (rec.last) { return rec.last; }
+  if (rec.last !== undefined) { return rec.last; }
   for (let i = rec.entries.length - 1; i >= 0; i--) {
     const e = rec.entries[i];
     if (e.model === '<synthetic>') { continue; }
@@ -409,6 +417,7 @@ function lastNonSynthetic(rec: FileCacheEntry | undefined): ActiveSessionInfo | 
     dirty = true;   // keep the backfill across restarts
     return rec.last;
   }
+  rec.last = null;   // scanned — remember the absence so we never rescan per tick
   return null;
 }
 
@@ -426,7 +435,14 @@ export async function findActiveSession(
   if (!isSafePath(path.join(projectDir, 'probe'))) { return null; }
   let names: string[];
   try { names = await fs.readdir(projectDir); } catch { return null; }
-  const files = names.filter((n) => n.endsWith('.jsonl')).map((n) => path.join(projectDir, n));
+  const jsonl = names.filter((n) => n.endsWith('.jsonl')).map((n) => path.join(projectDir, n));
+  if (jsonl.length === 0) { return null; }
+
+  // Same realpath + isSafePath gate as the walk (M-3): a symlinked jsonl file — or a
+  // symlinked project dir, which makes every file resolve outside the root — must
+  // never be read even though the project dir prefix itself looks lexical-safe.
+  const files: string[] = [];
+  await Promise.all(jsonl.map((f) => pushSafeFile(files, f)));
   if (files.length === 0) { return null; }
 
   await loadEntries(files);   // warm the parse cache (shared with all other consumers)
@@ -437,7 +453,9 @@ export async function findActiveSession(
     if (last && (!best || last.timestamp > best.timestamp)) { best = last; }
   }
   if (!best || best.timestamp < now - freshnessMs) { return null; }
-  return best;
+  // Return a copy: `best` aliases the cache's `last` record, and a caller mutating its
+  // result must not corrupt the shared parse cache.
+  return { timestamp: best.timestamp, model: best.model, usage: { ...best.usage } };
 }
 
 // ---- disk persistence -------------------------------------------------------
@@ -448,7 +466,7 @@ interface PersistedFile {
   offset: number
   entries: UsageEntry[]
   ids: string[]
-  last?: UsageEntry
+  last?: UsageEntry | null   // null = synthetic-only sentinel, undefined = pre-field cache
 }
 interface PersistedCache {
   version: number
@@ -476,8 +494,9 @@ export async function loadPersistedCache(): Promise<void> {
       const entries = rec.entries.filter(
         (e) => e && typeof e.timestamp === 'number' && isValidUsage((e as UsageEntry).usage),
       ) as UsageEntry[];
-      const last = (rec.last && typeof rec.last.timestamp === 'number'
-        && isValidUsage(rec.last.usage)) ? rec.last : undefined;   // old caches: backfill later
+      const last = rec.last === null ? null   // persisted "scanned, none" sentinel
+        : (rec.last && typeof rec.last.timestamp === 'number'
+          && isValidUsage(rec.last.usage)) ? rec.last : undefined;   // old caches: backfill later
       cache.set(filePath, {
         mtimeMs: rec.mtimeMs,
         size: rec.size,

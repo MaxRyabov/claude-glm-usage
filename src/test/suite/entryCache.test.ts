@@ -179,6 +179,46 @@ suite('EntryCache findActiveSession', () => {
     assert.strictEqual(active.timestamp, real.ms, 'synthetic tail is skipped');
   });
 
+  test('a synthetic-only file yields null, then picks up a real turn appended later', async () => {
+    const synthetic = at(0.5);
+    const real = at(0.1);
+    const file = path.join(projDir, 's.jsonl');
+    await fs.writeFile(file, line('r1', { model: '<synthetic>', ts: synthetic.iso }) + '\n');
+    assert.strictEqual(await findActiveSession(projDir), null, 'no non-synthetic turns yet');
+    // Second call exercises the "scanned, none" sentinel — must stay null without rescan.
+    assert.strictEqual(await findActiveSession(projDir), null);
+
+    await fs.appendFile(file, line('r2', { ts: real.iso }) + '\n');
+    const active = await findActiveSession(projDir);
+    assert.ok(active, 'appended real turn is found after the synthetic-only state');
+    assert.strictEqual(active.timestamp, real.ms);
+  });
+
+  test('a symlinked jsonl escaping the projects root is never read', async function () {
+    // Requires symlink privileges (Developer Mode / not restricted) — skip where absent.
+    const victimDir = path.join(os.tmpdir(), `entrycache-victim-${Date.now()}-${process.pid}`);
+    await fs.mkdir(victimDir, { recursive: true });
+    const victim = path.join(victimDir, 'victim.jsonl');
+    const fresh = at(0.1);
+    await fs.writeFile(victim, line('r-evil', { ts: fresh.iso }) + '\n');
+    const link = path.join(projDir, 'link.jsonl');
+    try {
+      await fs.symlink(victim, link, 'file');
+    } catch {
+      this.skip();
+      return;
+    }
+    try {
+      await fs.writeFile(path.join(projDir, 's.jsonl'), line('r-real', { ts: at(1).iso }) + '\n');
+      const active = await findActiveSession(projDir);
+      assert.ok(active);
+      assert.notStrictEqual(active.timestamp, fresh.ms, 'symlinked file outside the root must be ignored');
+    } finally {
+      await fs.rm(victimDir, { recursive: true, force: true });
+      await fs.rm(link, { force: true });
+    }
+  });
+
   test('a dir outside ~/.claude/projects is rejected defensively', async () => {
     const outside = path.join(os.tmpdir(), `entrycache-outside-${Date.now()}`);
     await fs.mkdir(outside, { recursive: true });
@@ -259,5 +299,15 @@ suite('EntryCache subagents walk', () => {
 
     const all = await discoverFiles();
     assert.ok(!byReal(all, deep), 'workflow-level agent files stay out of the walk');
+  });
+
+  test('a directory named like *.jsonl is not treated as a file', async () => {
+    const weirdDir = path.join(projDir, 'weird.jsonl');   // directory, not a session file
+    await fs.mkdir(weirdDir, { recursive: true });
+    await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1') + '\n');
+
+    const all = await discoverFiles();
+    assert.ok(!byReal(all, weirdDir), 'a *.jsonl-named directory stays out of the file list');
+    assert.ok(byReal(all, path.join(projDir, 's.jsonl')), 'real session file still discovered');
   });
 });
