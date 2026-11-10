@@ -80,7 +80,10 @@ suite('ProjectCost', () => {
         `credits30d: both GLM turns, got ${result.credits30d}`);
 
       // Same two GLM turns without the claude record: the USD delta is exactly the
-      // claude turn's cost — proving it is priced in dollars while earning no credits.
+      // claude turn's cost by the sonnet table ($3/$15/$0.30/$3.75 per 1M) — proving it
+      // is priced in dollars while earning no credits. A bare `>` would pass even with
+      // wrong sonnet rates; the exact delta catches a pricing regression.
+      const claudeCost = (100_000 * 3 + 200_000 * 0.30 + 50_000 * 15 + 999_999 * 3.75) / 1e6;
       const soloDir = path.join(os.tmpdir(), `projcost-solo-${Date.now()}-${Math.floor(performance.now())}`);
       await fs.mkdir(soloDir, { recursive: true });
       try {
@@ -89,7 +92,8 @@ suite('ProjectCost', () => {
           line('r-30h', 'glm-4.6', now - 30 * HOUR),
         ].join('\n'));
         const solo = await getProjectCostForDir(soloDir, 'solo', {}, now);
-        assert.ok(result.costToday > solo.costToday, 'the claude turn contributes USD cost');
+        assert.ok(Math.abs((result.costToday - solo.costToday) - claudeCost) < 1e-9,
+          `USD delta must be the claude turn's cost (${claudeCost}), got ${result.costToday - solo.costToday}`);
       } finally {
         await fs.rm(soloDir, { recursive: true, force: true });
       }

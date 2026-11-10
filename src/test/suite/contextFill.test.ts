@@ -94,7 +94,9 @@ suite('computeContextFill', () => {
   test(`⚠ threshold is window − ${CONTEXT_WARN_MARGIN_TOKENS} tokens: 185k warns, 170k does not`, async () => {
     await fs.writeFile(path.join(projDir, 's1.jsonl'), line('r1', 'glm-4.6', 1, { input: 170_000 }) + '\n');
     await fs.writeFile(path.join(projDir, 's2.jsonl'), line('r2', 'glm-4.6', 0.5, { input: 185_000 }) + '\n');
-    // s2 is the active session (newest), but check both thresholds via two separate dirs.
+    // s1 is the older decoy session: if the latest-turn pick regressed to it,
+    // usedTokens would read 170_000 and fail below. The 170k threshold itself is
+    // checked separately, in a clean dir where 170k IS the active session.
     const fill = await computeContextFill(projDir, null);
     assert.ok(fill);
     assert.strictEqual(fill.usedTokens, 185_000);
