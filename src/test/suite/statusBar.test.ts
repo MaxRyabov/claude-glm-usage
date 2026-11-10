@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { buildLabel, buildTooltip, formatDuration } from '../../statusBar';
 import { ClaudeUsageData } from '../../data/dataManager';
+import { ContextFill } from '../../data/contextFill';
 
 function makeData(overrides: Partial<ClaudeUsageData> = {}): ClaudeUsageData {
   return {
@@ -159,8 +160,10 @@ suite('StatusBar', () => {
   });
 
   test('z-ai provider uses cost mode in the label (no rate %)', () => {
+    // auto unit → credits for z-ai: the cost windows render in §, not $ (primaryUnit spec).
     const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'local-only', cost5h: 1.23, cost7d: 10 }));
-    assert.ok(label.includes('5h:$1.23'), `Expected cost in: ${label}`);
+    assert.ok(label.includes('5h:§3'), `Expected credit cost in: ${label}`);
+    assert.ok(label.includes('7d:§44'), `Expected credit cost in: ${label}`);
     assert.ok(!label.includes('%'), `Expected no rate percentage in: ${label}`);
   });
 
@@ -249,5 +252,174 @@ suite('Refused, missing and expired credentials', () => {
     assert.ok(buildTooltip(data).includes('login token expired'));
     // Without the notice the old label stays.
     assert.strictEqual(buildLabel(makeData({ dataSource: 'no-data' })), '🤖 Claude: run refresh');
+  });
+});
+
+// 2026-11-11 is a Wednesday: 07:00 UTC is inside the peak window, 12:00 UTC outside.
+// Injecting the moment keeps the peak assertions deterministic on any machine/CI clock.
+const PEAK_NOW = new Date(Date.UTC(2026, 10, 11, 7, 0));
+const OFFPEAK_NOW = new Date(Date.UTC(2026, 10, 11, 12, 0));
+
+function makeContext(fillRatio: number, nearLimit: boolean): ContextFill {
+  return {
+    model: 'glm-5.3',
+    windowTokens: 200_000,
+    usedTokens: Math.round(fillRatio * 200_000),
+    fillRatio,
+    nearLimit,
+  };
+}
+
+suite('Peak marker (⚡)', () => {
+  test('z-ai inside the window shows ⚡ next to the quota windows', () => {
+    const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], PEAK_NOW);
+    assert.ok(label.includes('7d:30% ⚡'), `Expected ⚡ after the quota windows: ${label}`);
+  });
+
+  test('z-ai outside the window shows no ⚡', () => {
+    const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
+    assert.ok(!label.includes('⚡'), `No peak badge off-peak: ${label}`);
+  });
+
+  test('claude-ai never shows ⚡', () => {
+    const label = buildLabel(makeData({ providerType: 'claude-ai', dataSource: 'cache' }), [], PEAK_NOW);
+    assert.ok(!label.includes('⚡'), `Anthropic has no peak tariff: ${label}`);
+  });
+
+  test('degraded states keep their plain label (no ⚡)', () => {
+    const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'no-credentials' }), [], PEAK_NOW);
+    assert.strictEqual(label, '🤖 Not logged in');
+  });
+
+  test('local-only data (no quota API) still shows ⚡', () => {
+    const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'local-only' }), [], PEAK_NOW);
+    assert.ok(label.includes('⚡'), `The badge depends on the clock, not on quota data: ${label}`);
+  });
+
+  test('rendering the peak segment issues no provider requests', () => {
+    // peakStatus is pure date math; the guard catches anyone wiring the badge to a fetch.
+    let calls = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls++;
+      throw new Error('status-bar rendering must not fetch');
+    }) as typeof fetch;
+    try {
+      const data = makeData({ providerType: 'z-ai', dataSource: 'cache' });
+      for (let i = 0; i < 3; i++) {
+        buildLabel(data, [mockProject], PEAK_NOW);
+        buildTooltip(data, [mockProject], PEAK_NOW);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assert.strictEqual(calls, 0, 'peak rendering must not call the provider');
+  });
+});
+
+suite('Context segment (ctx NN%)', () => {
+  test('shows the active session fill as a percentage', () => {
+    const label = buildLabel(
+      makeData({ providerType: 'z-ai', dataSource: 'cache', context: makeContext(0.38, false) }),
+      [], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('ctx 38%'), `Expected ctx 38% in: ${label}`);
+  });
+
+  test('marks the segment ⚠ at the auto-compact edge', () => {
+    const label = buildLabel(
+      makeData({ providerType: 'z-ai', dataSource: 'cache', context: makeContext(0.93, true) }),
+      [], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('ctx 93%⚠'), `Expected ⚠ at the edge: ${label}`);
+  });
+
+  test('shows the true ratio past 100% without clamping', () => {
+    const label = buildLabel(
+      makeData({ providerType: 'z-ai', dataSource: 'cache', context: makeContext(1.04, true) }),
+      [], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('ctx 104%'), `Expected 104% for an over-full window: ${label}`);
+  });
+
+  test('no fresh session hides the segment', () => {
+    const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
+    assert.ok(!label.includes('ctx'), `Expected no ctx segment: ${label}`);
+  });
+});
+
+suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
+  test('z-ai project segment renders in credits under auto', () => {
+    const label = buildLabel(
+      makeData({ providerType: 'z-ai', dataSource: 'cache' }),
+      [mockProject], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('my-app:§9'), `Expected credits for z-ai (creditsToday 9.1): ${label}`);
+    assert.ok(!label.includes('$'), `No dollar cost for z-ai in credit mode: ${label}`);
+  });
+
+  test('claude-ai project segment stays in dollars', () => {
+    const label = buildLabel(
+      makeData({ providerType: 'claude-ai', dataSource: 'cache' }),
+      [mockProject], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('my-app:$3.21'), `Expected dollars for claude-ai: ${label}`);
+  });
+
+  test('cost mode windows follow the primary unit', () => {
+    const label = buildLabel(
+      makeData({
+        providerType: 'z-ai', dataSource: 'local-only',
+        cost5h: 1.23, cost7d: 10.00, localCredits5h: 2800, localCredits7d: 9100,
+      }),
+      [], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('5h:§2.8k'), `Expected compact credits: ${label}`);
+    assert.ok(label.includes('7d:§9.1k'), `Expected compact credits: ${label}`);
+  });
+
+  test('multi-root PJ aggregate follows the primary unit', () => {
+    const second = { ...mockProject, projectName: 'other-app', costToday: 1.00, creditsToday: 4.0 };
+    const label = buildLabel(
+      makeData({ providerType: 'z-ai', dataSource: 'cache' }),
+      [mockProject, second], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('PJ:§13'), `Expected aggregated credits (9.1 + 4.0): ${label}`);
+  });
+
+  test('segments are joined with the · separator', () => {
+    const label = buildLabel(
+      makeData({ providerType: 'z-ai', dataSource: 'cache', context: makeContext(0.38, false) }),
+      [mockProject], OFFPEAK_NOW,
+    );
+    assert.ok(label.includes('ctx 38% · my-app:'), `Expected · between segments: ${label}`);
+    assert.ok(!label.includes('|'), `The old | separator is gone: ${label}`);
+  });
+});
+
+suite('Peak tooltip', () => {
+  test('inside the peak the tooltip names the end time', () => {
+    const tip = buildTooltip(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], PEAK_NOW);
+    assert.ok(tip.includes('Peak until'), `Expected the end-time hint:\n${tip}`);
+  });
+
+  test('outside the peak the tooltip names the local window bounds', () => {
+    const tip = buildTooltip(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
+    // Local times depend on the machine zone, so match the shape: "Peak 09:00–13:00 (UTC+3)".
+    assert.ok(/Peak \d{2}:\d{2}–\d{2}:\d{2} \(UTC[+-]\d/.test(tip), `Expected window bounds:\n${tip}`);
+  });
+
+  test('claude-ai tooltip has no peak line', () => {
+    const tip = buildTooltip(makeData({ providerType: 'claude-ai', dataSource: 'cache' }), [], PEAK_NOW);
+    assert.ok(!tip.includes('Peak'), `Anthropic has no peak line:\n${tip}`);
+  });
+
+  test('cost lines follow the primary unit', () => {
+    const tip = buildTooltip(
+      makeData({ providerType: 'z-ai', dataSource: 'local-only', localCreditsDay: 11.2 }),
+      [mockProject], OFFPEAK_NOW,
+    );
+    assert.ok(tip.includes('day:  §11'), `Expected credits in the cost section:\n${tip}`);
+    assert.ok(tip.includes('§9'), `Expected project credits (creditsToday 9.1):\n${tip}`);
   });
 });

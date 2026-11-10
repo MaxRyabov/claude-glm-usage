@@ -119,5 +119,7 @@
   "(login token expired)": "(токен входа истёк)",
   "Z.AI Usage": "Использование Z.AI",
   "Z.AI / GLM": "Z.AI / GLM",
-  "Custom endpoint": "Сторонний адрес API"
+  "Custom endpoint": "Сторонний адрес API",
+  "Peak until {0}": "Пик до {0}",
+  "Peak {0}–{1} ({2})": "Пик {0}–{1} ({2})"
 }

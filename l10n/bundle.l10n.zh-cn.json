@@ -119,5 +119,7 @@
   "(login token expired)": "（登录令牌已过期）",
   "Z.AI Usage": "Z.AI 用量",
   "Z.AI / GLM": "Z.AI / GLM",
-  "Custom endpoint": "自定义端点"
+  "Custom endpoint": "自定义端点",
+  "Peak until {0}": "高峰期至 {0}",
+  "Peak {0}–{1} ({2})": "高峰期 {0}–{1} ({2})"
 }

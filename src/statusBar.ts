@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ClaudeUsageData, ProjectCostData } from './data/dataManager';
-import { config } from './config';
+import { peakStatus, PeakStatus } from './data/peakHours';
+import { config, resolvePrimaryUnit, formatCredits, PrimaryUnit } from './config';
 
 export function formatDuration(seconds: number): string {
   if (seconds < 3600) {
@@ -37,9 +38,39 @@ function truncateName(name: string): string {
   return name.length > 12 ? name.slice(0, 11) + '…' : name;
 }
 
-export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[] = []): string {
+/**
+ * Cost formatter in the primary unit (claudeStatus.display.primaryUnit): credits (§) for
+ * z-ai under auto/credits, dollars for everyone else. One resolver for the label, the
+ * cost-mode windows and the tooltip, so "§2.8k" means the same number everywhere.
+ */
+function costFormatter(providerType: ClaudeUsageData['providerType']): {
+  unit: PrimaryUnit
+  fmt: (usd: number, credits: number) => string
+} {
+  const unit = resolvePrimaryUnit(providerType, config.primaryUnitSetting);
+  return {
+    unit,
+    fmt: (usd: number, credits: number): string =>
+      unit === 'credits' ? formatCredits(credits) : `$${usd.toFixed(2)}`,
+  };
+}
+
+/** One tooltip line about the peak window (z-ai only): inside — the end time, outside — the local boundaries. */
+function peakLine(peak: PeakStatus): string {
+  return peak.active
+    ? vscode.l10n.t('Peak until {0}', peak.windowEndLocal)
+    : vscode.l10n.t('Peak {0}–{1} ({2})', peak.windowStartLocal, peak.windowEndLocal, peak.tzLabel);
+}
+
+export function buildLabel(
+  data: ClaudeUsageData,
+  projectCosts: ProjectCostData[] = [],
+  now: Date = new Date(),
+): string {
   const { dataSource, utilization5h, utilization7d, limitStatus, cost5h, cost7d, cacheAge, has7dLimit, providerType } = data;
+  const { localCredits5h, localCredits7d, context } = data;
   const displayMode = config.displayMode;
+  const { fmt: fmtCost } = costFormatter(providerType);
 
   if (dataSource === 'no-credentials') {
     return vscode.l10n.t('🤖 Not logged in');
@@ -71,8 +102,8 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
   let part7d: string;
 
   if (useCostMode) {
-    part5h = `5h:$${cost5h.toFixed(2)}`;
-    part7d = ` 7d:$${cost7d.toFixed(2)}`;
+    part5h = `5h:${fmtCost(cost5h, localCredits5h)}`;
+    part7d = ` 7d:${fmtCost(cost7d, localCredits7d)}`;
   } else {
     // percent mode — claude-ai and z-ai
     //
@@ -97,21 +128,40 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
       : '';
   }
 
+  // Peak marker (z-ai only, next to the quota windows): recomputed from `now` on every
+  // render tick, so the badge enters/leaves with the clock and never goes stale between
+  // refreshes. Pure date math — never a provider request.
+  const peak = peakStatus(now, providerType);
+  const peakPart = peak?.active ? ' ⚡' : '';
+
+  // Context fill of the workspace's active session: absent when there is no fresh session,
+  // so the segment simply hides. fillRatio is not clamped — an override below the real
+  // fill shows its true 104%.
+  const ctxPart = context
+    ? `ctx ${Math.round(context.fillRatio * 100)}%${context.nearLimit ? '⚠' : ''}`
+    : '';
+
   // Project cost suffix
   let projectPart = '';
   if (config.showProjectCost && projectCosts.length > 0) {
     if (projectCosts.length === 1) {
       const pj = projectCosts[0];
       const shortName = truncateName(pj.projectName);
-      projectPart = ` | ${shortName}:$${pj.costToday.toFixed(2)}`;
+      projectPart = `${shortName}:${fmtCost(pj.costToday, pj.creditsToday)}`;
     } else {
       // Multi-root: aggregate
-      const total = projectCosts.reduce((sum, p) => sum + p.costToday, 0);
-      projectPart = ` | PJ:$${total.toFixed(2)}`;
+      const totalUsd = projectCosts.reduce((sum, p) => sum + p.costToday, 0);
+      const totalCredits = projectCosts.reduce((sum, p) => sum + p.creditsToday, 0);
+      projectPart = `PJ:${fmtCost(totalUsd, totalCredits)}`;
     }
   }
 
-  const main = `🤖 ${part5h}${part7d}${projectPart}`;
+  // Four segments don't fit with the old ` | ` — the separator is ` · ` (spec D6).
+  const parts = [`${part5h}${part7d}${peakPart}`];
+  if (ctxPart) { parts.push(ctxPart); }
+  if (projectPart) { parts.push(projectPart); }
+
+  const main = `🤖 ${parts.join(' · ')}`;
   return isStale ? `${main}${staleSuffix}` : main;
 }
 
@@ -143,12 +193,18 @@ function rejectedHint(providerType: ClaudeUsageData['providerType'], status: 401
   return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json');
 }
 
-export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostData[] = []): string {
+export function buildTooltip(
+  data: ClaudeUsageData,
+  projectCosts: ProjectCostData[] = [],
+  now: Date = new Date(),
+): string {
   const {
     utilization5h, utilization7d, resetIn5h, resetIn7d,
     cost5h, costDay, cost7d, tokensIn5h, tokensOut5h,
     cacheAge, dataSource, has7dLimit, providerType,
   } = data;
+  const { localCredits5h, localCreditsDay, localCredits7d } = data;
+  const { fmt: fmtCost } = costFormatter(providerType);
 
   const tokenExpired = data.pollNotice === 'token-expired'
     ? vscode.l10n.t('Claude Code login token expired — any Claude Code request refreshes it')
@@ -173,11 +229,13 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
 
   // Rate-limit section — claude-ai (Anthropic windows) and z-ai (quota), when live data exists
   const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
+  const peak = peakStatus(now, providerType);
   if (supportsRateLimit && dataSource !== 'local-only') {
     const title = providerType === 'z-ai' ? vscode.l10n.t('Z.AI Usage') : vscode.l10n.t('Claude Code Usage');
     const bar5h = buildBar(utilization5h, 8);
     lines.push(
       title,
+      ...(peak ? [peakLine(peak)] : []),
       '─────────────────────────────',
       `5h window:   ${formatPercent(utilization5h)} [${bar5h}] resets in ${formatDuration(resetIn5h)}`,
     );
@@ -192,22 +250,27 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
       : providerType === 'z-ai' ? vscode.l10n.t('Z.AI / GLM')
       : providerType === 'custom-endpoint' ? vscode.l10n.t('Custom endpoint')
       : vscode.l10n.t('Claude Code');
-    lines.push(`Claude Code (${providerLabel})`, '─────────────────────────────', '');
+    lines.push(
+      `Claude Code (${providerLabel})`,
+      ...(peak ? [peakLine(peak)] : []),
+      '─────────────────────────────',
+      '',
+    );
   }
 
   lines.push(
     vscode.l10n.t('Token Cost (local)'),
     '─────────────────────────────',
-    `5h:   in:${formatTokens(tokensIn5h)} out:${formatTokens(tokensOut5h)}  $${cost5h.toFixed(2)}`,
-    `day:  $${costDay.toFixed(2)}`,
-    `7d:   $${cost7d.toFixed(2)}`,
+    `5h:   in:${formatTokens(tokensIn5h)} out:${formatTokens(tokensOut5h)}  ${fmtCost(cost5h, localCredits5h)}`,
+    `day:  ${fmtCost(costDay, localCreditsDay)}`,
+    `7d:   ${fmtCost(cost7d, localCredits7d)}`,
   );
 
   if (projectCosts.length > 0) {
     lines.push('');
     for (const pj of projectCosts) {
       lines.push(vscode.l10n.t('Project: {0}', pj.projectName));
-      lines.push(`  ${vscode.l10n.t('Today')}: $${pj.costToday.toFixed(2)}  |  ${vscode.l10n.t('7 days')}: $${pj.cost7d.toFixed(2)}`);
+      lines.push(`  ${vscode.l10n.t('Today')}: ${fmtCost(pj.costToday, pj.creditsToday)}  |  ${vscode.l10n.t('7 days')}: ${fmtCost(pj.cost7d, pj.credits7d)}`);
     }
   }
 
