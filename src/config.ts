@@ -3,6 +3,36 @@ import type { ClaudeProvider } from './data/apiClient';
 import type { TokenPricing } from './data/jsonlReader';
 import type { RateLimitThresholds } from './data/notificationDecision';
 
+/** Value of `claudeStatus.display.primaryUnit` as the user set it. */
+export type PrimaryUnitSetting = 'auto' | 'credits' | 'usd';
+
+/** Resolved display unit: credits exist only for the z.ai credit tariff. */
+export type PrimaryUnit = 'credits' | 'usd';
+
+/**
+ * Resolve the primary cost-display unit. `auto` follows the provider (credits for z-ai,
+ * dollars for everyone else); an explicit `credits` is defined only for z-ai and degrades
+ * to dollars elsewhere — no other provider has a credit tariff to convert to. An unknown
+ * setting value (hand-edited settings.json) reads as `auto`, the declared default.
+ */
+export function resolvePrimaryUnit(providerType: string, setting: PrimaryUnitSetting): PrimaryUnit {
+  if (setting === 'usd') { return 'usd'; }
+  if (setting === 'credits') { return providerType === 'z-ai' ? 'credits' : 'usd'; }
+  return providerType === 'z-ai' ? 'credits' : 'usd';
+}
+
+/**
+ * Credits with the § marker, compact like formatTokens: whole numbers below 1k, then
+ * `§2.8k` / `§1.2M`. § is one glyph, never confused with $, and present in the
+ * monospace status-bar fonts.
+ */
+export function formatCredits(n: number): string {
+  const r = Math.round(n);
+  if (r >= 1_000_000) { return `§${(n / 1_000_000).toFixed(1)}M`; }
+  if (r >= 1_000) { return `§${(n / 1_000).toFixed(1)}k`; }
+  return `§${r}`;
+}
+
 export class ExtensionConfig {
   private get cfg() {
     return vscode.workspace.getConfiguration('claudeStatus');
@@ -10,6 +40,12 @@ export class ExtensionConfig {
 
   get displayMode(): 'percent' | 'cost' {
     return this.cfg.get('displayMode', 'percent');
+  }
+
+  /** Raw `claudeStatus.display.primaryUnit` value; resolvePrimaryUnit applies it per provider. */
+  get primaryUnitSetting(): PrimaryUnitSetting {
+    const v = this.cfg.get<PrimaryUnitSetting>('display.primaryUnit', 'auto');
+    return v === 'credits' || v === 'usd' ? v : 'auto';
   }
 
   get statusBarAlignment(): 'left' | 'right' {

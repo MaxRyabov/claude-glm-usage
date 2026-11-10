@@ -45,6 +45,8 @@ What the status bar and dashboard show, depending on your Claude plan and key se
 | Claude.ai — see live % in real time | `rateLimitApi.enabled: true`, `displayMode: "percent"` (defaults) |
 | Claude.ai — prefer cost over % | `displayMode: "cost"` |
 | Claude.ai — offline / no outbound HTTPS | `rateLimitApi.enabled: false` (cached % still shown if previously fetched) |
+| z.ai — see spends in plan credits (§) | `display.primaryUnit: "auto"` (default; cost segments show `§2.8k`-style credits) |
+| z.ai — see spends in dollars | `display.primaryUnit: "usd"` |
 | AWS Bedrock / API key | No extra config needed — cost mode is automatic |
 | Track spending against a budget | Set `budget.dailyUsd` in dashboard or settings |
 
@@ -64,6 +66,13 @@ What the status bar and dashboard show, depending on your Claude plan and key se
     "enum": ["percent", "cost"],
     "default": "percent",
     "description": "Status bar display mode: utilization percentage or USD cost."
+  },
+
+  "claudeStatus.display.primaryUnit": {
+    "type": "string",
+    "enum": ["auto", "credits", "usd"],
+    "default": "auto",
+    "description": "Primary unit for cost display: z.ai credits (§) or US dollars. `auto` — credits for the z.ai provider, dollars for everyone else; `credits` applies only to z-ai and degrades to dollars for providers without a credit tariff; `usd` applies to any provider. Cost mode windows, the project-cost segment and the cost tooltip follow this unit; budgets always stay in USD."
   },
 
   "claudeStatus.statusBar.alignment": {

@@ -28,6 +28,17 @@ suite('package.json manifest hardening', () => {
     assert.strictEqual(setting.enum.length, setting.enumDescriptions.length);
   });
 
+  test('display.primaryUnit setting is declared with the auto default', () => {
+    const setting = pkg.contributes.configuration.properties['claudeStatus.display.primaryUnit'];
+    assert.ok(setting, 'claudeStatus.display.primaryUnit must exist');
+    assert.deepStrictEqual(setting.enum, ['auto', 'credits', 'usd']);
+    assert.strictEqual(setting.default, 'auto');
+    assert.strictEqual(setting.type, 'string');
+    // enumDescriptions must stay aligned with enum length (parity of the nls keys
+    // themselves is enforced by the locale suite).
+    assert.strictEqual(setting.enum.length, setting.enumDescriptions.length);
+  });
+
   test('pricing.models per-model override setting is declared', () => {
     const setting = pkg.contributes.configuration.properties['claudeStatus.pricing.models'];
     assert.ok(setting, 'claudeStatus.pricing.models must exist');
