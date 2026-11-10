@@ -75,6 +75,11 @@ suite('computeContextFill', () => {
     // findActiveSession walks the real (possibly large) ~/.claude/projects tree.
     this.timeout(20_000);
     __resetEntryCacheForTests();
+    // Sweep leftovers from a previous crashed run: a suiteTeardown never runs after
+    // a crash, so the next run's setup is the reliable sweeper.
+    for (const leftover of (await fs.readdir(projectsDir)).filter((d) => d.startsWith('_ctxfill-test-'))) {
+      await fs.rm(path.join(projectsDir, leftover), { recursive: true, force: true });
+    }
     await fs.mkdir(projectsDir, { recursive: true });
     projDir = path.join(projectsDir, `_ctxfill-test-${Date.now()}-${process.pid}`);
     await fs.mkdir(projDir, { recursive: true });
