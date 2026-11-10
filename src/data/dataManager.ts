@@ -430,12 +430,16 @@ export class DataManager {
   }
 
   /**
-   * Context fill of the current workspace's active session: map the first workspace
-   * folder to its ~/.claude/projects dir and read the cached last turn. Null when the
-   * workspace has no project or no fresh (< 6h) session — the segment then hides.
+   * Context fill of the current workspace's active session: map the workspace folder the
+   * active editor belongs to (the first folder when there is no editor, e.g. a fresh
+   * window) to its ~/.claude/projects dir and read the cached last turn. In a multi-root
+   * workspace the first folder may be a different project than the one being worked on.
+   * Null when the workspace has no project or no fresh (< 6h) session — the segment then hides.
    */
   private async computeContextFill(): Promise<ContextFill | null> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const folder = (activeUri ? vscode.workspace.getWorkspaceFolder(activeUri) : undefined)
+      ?? vscode.workspace.workspaceFolders?.[0];
     if (!folder) { return null; }
     try {
       const projectDir = await workspacePathToProjectDir(folder.uri.fsPath);
