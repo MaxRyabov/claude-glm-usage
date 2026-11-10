@@ -171,12 +171,14 @@ async function readSlice(filePath: string, offset: number, length: number): Prom
 /** Track the newest non-synthetic entry appended at [fromIdx, entries.length). */
 function refreshLast(rec: FileCacheEntry, fromIdx: number): void {
   // Lines are chronological within a file, so >= keeps the later of equal timestamps.
+  // Never writes the null sentinel: an empty range (no new lines survived dedupe) says
+  // nothing about the pre-existing entries — only a full scan (lastNonSynthetic) may
+  // conclude "nothing non-synthetic" for a record loaded from a pre-`last` cache.
   for (let i = fromIdx; i < rec.entries.length; i++) {
     const e = rec.entries[i];
     if (e.model === '<synthetic>') { continue; }
     if (!rec.last || e.timestamp >= rec.last.timestamp) { rec.last = { ...e }; }
   }
-  if (rec.last === undefined) { rec.last = null; }   // scanned — nothing non-synthetic
 }
 
 async function parseFull(filePath: string, mtimeMs: number, size: number): Promise<FileCacheEntry> {
@@ -316,8 +318,9 @@ async function collectSessionSigs(dirs: { p: string; m: number }[]): Promise<Ses
   await Promise.all(dirs.map(async (dir) => {
     let entries: Dirent[];
     try { entries = await fs.readdir(dir.p, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) { continue; }
+    // Stats of one project dir's sessions run concurrently — hundreds of sequential
+    // round-trips per refresh tick would be measurable Extension Host load.
+    await Promise.all(entries.filter((e) => e.isDirectory()).map(async (entry) => {
       const sessionPath = path.join(dir.p, entry.name);
       try {
         const m = (await fs.stat(sessionPath)).mtimeMs;
@@ -325,7 +328,7 @@ async function collectSessionSigs(dirs: { p: string; m: number }[]): Promise<Ses
         try { sub = (await fs.stat(path.join(sessionPath, 'subagents'))).mtimeMs; } catch { /* none */ }
         sigs.push({ p: sessionPath, m, sub });
       } catch { /* session vanished between readdir and stat */ }
-    }
+    }));
   }));
   sigs.sort((a, b) => (a.p < b.p ? -1 : 1));
   return sigs;
@@ -372,11 +375,13 @@ async function walkAll(): Promise<string[]> {
     for (const entry of entries) {
       if (entry.isDirectory()) {
         // Subagent logs: <session>/subagents/*.jsonl — one fixed level, no full recursion.
+        // isFile() keeps a *directory* named like *.jsonl out of the list, same as the
+        // top-level branch keeps directories out via isDirectory()-first.
         const subDir = path.join(dir.p, entry.name, 'subagents');
-        let subEntries: string[];
-        try { subEntries = await fs.readdir(subDir); } catch { continue; }
-        for (const name of subEntries) {
-          if (name.endsWith('.jsonl')) { await pushSafeFile(files, path.join(subDir, name)); }
+        let subEntries: Dirent[];
+        try { subEntries = await fs.readdir(subDir, { withFileTypes: true }); } catch { continue; }
+        for (const se of subEntries) {
+          if (se.isFile() && se.name.endsWith('.jsonl')) { await pushSafeFile(files, path.join(subDir, se.name)); }
         }
       } else if (entry.name.endsWith('.jsonl')) {
         // Top-level session file; the isDirectory() check above keeps a *directory*

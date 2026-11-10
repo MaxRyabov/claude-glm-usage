@@ -310,4 +310,15 @@ suite('EntryCache subagents walk', () => {
     assert.ok(!byReal(all, weirdDir), 'a *.jsonl-named directory stays out of the file list');
     assert.ok(byReal(all, path.join(projDir, 's.jsonl')), 'real session file still discovered');
   });
+
+  test('a directory named like *.jsonl inside subagents/ is not treated as a file', async () => {
+    const weirdSub = path.join(subDir, 'not-a-file.jsonl');   // directory inside subagents/
+    await fs.mkdir(weirdSub, { recursive: true });
+    const agent = path.join(subDir, 'agent-ok.jsonl');
+    await fs.writeFile(agent, line('r1') + '\n');
+
+    const all = await discoverFiles();
+    assert.ok(!byReal(all, weirdSub), 'a *.jsonl-named directory inside subagents/ stays out');
+    assert.ok(byReal(all, agent), 'real subagent file still discovered');
+  });
 });
