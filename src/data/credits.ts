@@ -30,8 +30,14 @@ export function isCreditModel(model: string | undefined): boolean {
   return name.includes('glm') || name.includes('flash');
 }
 
-/** Flash models get the discounted multiplier tier, everything else the base one. */
-export function creditMultipliersFor(model: string | undefined): CreditMultipliers {
+/**
+ * Multiplier tier for a model, or null when the model is not billed in credits at all.
+ * Returning null (rather than silently handing out the GLM base tier) keeps any future
+ * caller from charging claude-* turns — correctness must not depend on checking
+ * isCreditModel first.
+ */
+function creditMultipliersFor(model: string | undefined): CreditMultipliers | null {
+  if (!isCreditModel(model)) { return null; }
   return (model ?? '').toLowerCase().includes('flash')
     ? GLM_FLASH_CREDIT_MULTIPLIERS
     : GLM_CREDIT_MULTIPLIERS;
@@ -49,8 +55,8 @@ export interface CreditEntry {
  * window closes. Non-GLM turns cost 0 credits.
  */
 export function creditsForEntry(entry: CreditEntry, peakActive: boolean): number {
-  if (!isCreditModel(entry.model)) { return 0; }
   const m = creditMultipliersFor(entry.model);
+  if (!m) { return 0; }
   const weighted =
     (entry.usage.input_tokens || 0) * m.input +
     (entry.usage.cache_read_input_tokens || 0) * m.cacheRead +
