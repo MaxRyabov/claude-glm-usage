@@ -19,6 +19,9 @@ by plain spaces. Each optional segment hides when it has no data.
 🤖 5h:78% 7d:84% · my-app:$3.21
 ```
 
+(The example shows claude-ai, whose cost segments are dollars; z-ai renders the
+same windows with credits — `my-app:§2.8k` — see the z-ai example below.)
+
 ### Warning mode (≥75% utilization)
 ```
 🤖 5h:78%⚠ 7d:84%⚠ · my-app:$3.21
@@ -146,6 +149,7 @@ Use VSCode theme color IDs (not hardcoded hex):
 | Stale data | — | `descriptionForeground` (dimmed) |
 | No credentials | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
 | Rejected credentials (auth-rejected) | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
+| No data (`no-data`) | — | — (default) |
 | Provider without rate limits (`!supportsRateLimit`) or `local-only` | — | — (default) |
 
 > z-ai in quota mode is not «non-claude-ai» here: `supportsRateLimit('z-ai')` is
