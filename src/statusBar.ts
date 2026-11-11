@@ -349,8 +349,11 @@ export class StatusBarManager {
   }
 
   update(data: ClaudeUsageData, projectCosts: ProjectCostData[] = []): void {
-    this.item.text = buildLabel(data, projectCosts);
-    this.item.tooltip = buildTooltip(data, projectCosts);
+    // One clock reading for both renderings: two separate new Date() calls could straddle
+    // the peak-window boundary and print ⚡ in the label but not in the tooltip.
+    const now = new Date();
+    this.item.text = buildLabel(data, projectCosts, now);
+    this.item.tooltip = buildTooltip(data, projectCosts, now);
     applyColor(this.item, data);
   }
 
