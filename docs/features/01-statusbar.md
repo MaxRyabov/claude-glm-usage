@@ -50,10 +50,12 @@ by plain spaces. Each optional segment hides when it has no data.
 - `ctx 38%` — context fill of the workspace's active session (last turn's
   input + cache_read + cache_creation vs the model's context window). Hidden when
   there is no fresh (< 6 h, `ACTIVE_SESSION_FRESHNESS_MS` in
-  `src/data/entryCache.ts`) session. `⚠` appears at the auto-compact edge
-  (window − `CONTEXT_WARN_MARGIN_TOKENS` = 20k tokens, capped at 10% of the
-  window; both are fixed constants in `src/data/contextFill.ts`, not settings),
-  e.g. `ctx 93%⚠`; a `CLAUDE_CODE_MAX_CONTEXT_TOKENS` override set below the real
+  `src/data/entryCache.ts`) session. `⚠` appears at the auto-compact edge:
+  `margin = min(CONTEXT_WARN_MARGIN_TOKENS, 10% of the window)` and the threshold
+  is `window − margin` — for a 200k window that is min(20k, 20k) = 20k → ⚠ from
+  180k; for a 32k window min(20k, 3.2k) = 3.2k → ⚠ from 28.8k. Both are fixed
+  constants in `src/data/contextFill.ts`, not settings, e.g. `ctx 93%⚠`; a
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` override set below the real
   fill shows its true value (`ctx 104%`) without clamping.
 - `§2.8k` — the cost segment follows `claudeStatus.display.primaryUnit`
   (`auto | credits | usd`, default `auto`): credits (§) for z-ai, dollars ($)
@@ -144,7 +146,10 @@ Use VSCode theme color IDs (not hardcoded hex):
 | Stale data | — | `descriptionForeground` (dimmed) |
 | No credentials | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
 | Rejected credentials (auth-rejected) | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
-| Non-claude-ai | — | — (default) |
+| Provider without rate limits (`!supportsRateLimit`) or `local-only` | — | — (default) |
+
+> z-ai in quota mode is not «non-claude-ai» here: `supportsRateLimit('z-ai')` is
+> true, so its warning/denied states get the same colors as claude-ai.
 
 ```typescript
 function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {

@@ -269,10 +269,11 @@ suite('Refused, missing and expired credentials', () => {
 });
 
 function makeContext(fillRatio: number, nearLimit: boolean): ContextFill {
+  const WINDOW_TOKENS = 200_000;
   return {
     model: 'glm-5.3',
-    windowTokens: 200_000,
-    usedTokens: Math.round(fillRatio * 200_000),
+    windowTokens: WINDOW_TOKENS,
+    usedTokens: Math.round(fillRatio * WINDOW_TOKENS),
     fillRatio,
     nearLimit,
   };
