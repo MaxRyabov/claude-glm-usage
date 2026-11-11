@@ -165,9 +165,10 @@ suite('StatusBar', () => {
     // the usd overrides (cost5h 1.23 / cost7d 10) are here to prove the dollar values
     // are NOT what the label shows (primaryUnit spec, auto → credits for z-ai).
     const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'local-only', cost5h: 1.23, cost7d: 10 }));
-    // Digit-boundary assertions: a bare includes('5h:§3') would also pass for §34.
-    assert.match(label, /5h:§3(?!\d)/, `expected the credit cost window (localCredits5h 2.8 → §3): ${label}`);
-    assert.match(label, /7d:§44(?!\d)/, `expected the credit cost window (localCredits7d 44 → §44): ${label}`);
+    // Digit-boundary assertions: a bare includes('5h:§3') would also pass for §34,
+    // and (?!\d) would still pass for §3.5 — the point excludes the fraction dot too.
+    assert.match(label, /5h:§3(?![\d.])/, `expected the credit cost window (localCredits5h 2.8 → §3): ${label}`);
+    assert.match(label, /7d:§44(?![\d.])/, `expected the credit cost window (localCredits7d 44 → §44): ${label}`);
     assert.ok(!label.includes('%'), `Expected no rate percentage in: ${label}`);
   });
 

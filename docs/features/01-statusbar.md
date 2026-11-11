@@ -13,7 +13,7 @@ The ` · ` (middle dot) separates the major segments — [quota windows + peak b
 context → project cost. Inside the first group the windows and the ⚡ badge are joined
 by plain spaces. Each optional segment hides when it has no data.
 
-### Percent mode (claude-ai provider, `displayMode: "percent"`)
+### Percent mode (default — claude-ai and z-ai, `displayMode: "percent"`)
 
 ```
 🤖 5h:78% 7d:84% · my-app:$3.21
@@ -43,8 +43,11 @@ by plain spaces. Each optional segment hides when it has no data.
   the window itself.
 - `ctx 38%` — context fill of the workspace's active session (last turn's
   input + cache_read + cache_creation vs the model's context window). Hidden when
-  there is no fresh (< 6 h) session. `⚠` appears at the auto-compact edge
-  (window − 20k tokens), e.g. `ctx 93%⚠`; an override below the real fill shows
+  there is no fresh (< 6 h, `ACTIVE_SESSION_FRESHNESS_MS` in
+  `src/data/entryCache.ts`) session. `⚠` appears at the auto-compact edge
+  (window − `CONTEXT_WARN_MARGIN_TOKENS` = 20k tokens, capped at 10% of the
+  window; both are fixed constants in `src/data/contextFill.ts`, not settings),
+  e.g. `ctx 93%⚠`; an override below the real fill shows
   its true value (`ctx 104%`) without clamping.
 - `§2.8k` — the cost segment follows `claudeStatus.display.primaryUnit`
   (`auto | credits | usd`, default `auto`): credits (§) for z-ai, dollars ($)

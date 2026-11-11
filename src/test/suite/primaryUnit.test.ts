@@ -1,5 +1,6 @@
 import * as assert from 'assert';
-import { resolvePrimaryUnit, formatCredits, PrimaryUnitSetting } from '../../config';
+import { resolvePrimaryUnit, formatCredits } from '../../config';
+import type { PrimaryUnitSetting } from '../../config';
 import type { ClaudeProvider } from '../../data/apiClient';
 
 suite('resolvePrimaryUnit', () => {
@@ -71,6 +72,13 @@ suite('formatCredits', () => {
     assert.strictEqual(formatCredits(999_949_999), '§999.9M');
     assert.strictEqual(formatCredits(999_950_000), '§1.0B');
     assert.strictEqual(formatCredits(1_000_000_000), '§1.0B');
+  });
+
+  test('the same carry applies inside the B tier', () => {
+    // (999_950_000_000 / 1e9).toFixed(1) is "1000.0" — the B tier hands it over to T,
+    // completing the k→M / M→B / B→T carry symmetry.
+    assert.strictEqual(formatCredits(999_949_999_999), '§999.9B');
+    assert.strictEqual(formatCredits(999_950_000_000), '§1.0T');
   });
 
   test('millions compact with the M suffix', () => {

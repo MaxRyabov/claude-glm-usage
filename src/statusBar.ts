@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { ClaudeUsageData, ProjectCostData } from './data/dataManager';
-import { peakStatus, PeakStatus } from './data/peakHours';
-import { ContextFill } from './data/contextFill';
+import { peakStatus } from './data/peakHours';
+import type { PeakStatus } from './data/peakHours';
+import type { ContextFill } from './data/contextFill';
 import { config, resolvePrimaryUnit, formatCredits } from './config';
 
 export function formatDuration(seconds: number): string {
