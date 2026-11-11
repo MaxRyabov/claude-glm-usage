@@ -399,8 +399,10 @@ suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
       }),
       [], OFFPEAK_NOW,
     );
-    assert.ok(label.includes('5h:§2.8k'), `Expected compact credits: ${label}`);
-    assert.ok(label.includes('7d:§9.1k'), `Expected compact credits: ${label}`);
+    // Digit+dot boundary (the digit-boundary convention of this suite): a bare
+    // includes('5h:§2.8k') would also pass for §2.8k5.
+    assert.match(label, /5h:§2\.8k(?![\d.])/, `Expected compact credits: ${label}`);
+    assert.match(label, /7d:§9\.1k(?![\d.])/, `Expected compact credits: ${label}`);
   });
 
   test('multi-root PJ aggregate follows the primary unit', () => {
@@ -409,7 +411,7 @@ suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
       makeData({ providerType: 'z-ai', dataSource: 'cache' }),
       [mockProject, second], OFFPEAK_NOW,
     );
-    assert.match(label, /PJ:§13(?!\d)/, `Expected aggregated credits (9.1 + 4.0): ${label}`);
+    assert.match(label, /PJ:§13(?![\d.])/, `Expected aggregated credits (9.1 + 4.0): ${label}`);
   });
 
   test('segments are joined with the · separator', () => {

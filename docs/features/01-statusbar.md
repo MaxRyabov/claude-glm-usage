@@ -35,7 +35,12 @@ by plain spaces. Each optional segment hides when it has no data.
 ```
 - `⚡` — peak tariff is active (double credits); shown only for the z-ai provider,
   even when the quota API is off. Recomputed on every render tick from the clock
-  alone — it never triggers a provider request.
+  alone — it never triggers a provider request. The window is defined in **UTC**:
+  weekdays Mon–Fri, `[06:00, 10:00)` UTC (start inclusive, end exclusive) — the
+  weekday and the hours come from the UTC calendar, not the machine zone. The
+  tooltip's `Peak …` line shows those same UTC boundaries converted to the local
+  time zone for convenience; DST transitions shift that local rendering but never
+  the window itself.
 - `ctx 38%` — context fill of the workspace's active session (last turn's
   input + cache_read + cache_creation vs the model's context window). Hidden when
   there is no fresh (< 6 h) session. `⚠` appears at the auto-compact edge

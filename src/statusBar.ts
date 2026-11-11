@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ClaudeUsageData, ProjectCostData } from './data/dataManager';
 import { peakStatus, PeakStatus } from './data/peakHours';
 import { ContextFill } from './data/contextFill';
-import { config, resolvePrimaryUnit, formatCredits, PrimaryUnit } from './config';
+import { config, resolvePrimaryUnit, formatCredits } from './config';
 
 export function formatDuration(seconds: number): string {
   if (seconds < 3600) {
@@ -44,16 +44,19 @@ function truncateName(name: string): string {
  * z-ai under auto/credits, dollars for everyone else. One resolver for the label, the
  * cost-mode windows and the tooltip, so "§2.8k" means the same number everywhere.
  */
-function costFormatter(providerType: ClaudeUsageData['providerType']): {
-  unit: PrimaryUnit
-  fmt: (usd: number, credits: number) => string
-} {
+function costFormatter(providerType: ClaudeUsageData['providerType']): (usd: number, credits: number) => string {
   const unit = resolvePrimaryUnit(providerType, config.primaryUnitSetting);
-  return {
-    unit,
-    fmt: (usd: number, credits: number): string =>
-      unit === 'credits' ? formatCredits(credits) : `$${usd.toFixed(2)}`,
-  };
+  return (usd: number, credits: number): string =>
+    unit === 'credits' ? formatCredits(credits) : `$${usd.toFixed(2)}`;
+}
+
+/**
+ * claude-ai (Anthropic windows) and z-ai (quota) expose live rate-limit data. The label,
+ * the tooltip and the color rules all ask this one question — keeping it in one place
+ * matters when a provider is added.
+ */
+function supportsRateLimit(providerType: ClaudeUsageData['providerType']): boolean {
+  return providerType === 'claude-ai' || providerType === 'z-ai';
 }
 
 /** One tooltip line about the peak window (z-ai only): inside — the end time, outside — the local boundaries. */
@@ -63,13 +66,17 @@ function peakLine(peak: PeakStatus): string {
     : vscode.l10n.t('Peak {0}–{1} ({2})', peak.windowStartLocal, peak.windowEndLocal, peak.tzLabel);
 }
 
+/** Shared ctx-percent rendering — one rule for the label segment and the tooltip line. */
+function contextPercent(context: ContextFill): string {
+  return `${Math.round(context.fillRatio * 100)}%${context.nearLimit ? '⚠' : ''}`;
+}
+
 /**
  * One tooltip line with the context fill — the tooltip must convey everything the label
  * shows (Accessibility), so the ctx segment gets a line of its own.
  */
 function contextLine(context: ContextFill): string {
-  const pct = `${Math.round(context.fillRatio * 100)}%${context.nearLimit ? '⚠' : ''}`;
-  return vscode.l10n.t('Context: {0}', pct);
+  return vscode.l10n.t('Context: {0}', contextPercent(context));
 }
 
 export function buildLabel(
@@ -80,7 +87,7 @@ export function buildLabel(
   const { dataSource, utilization5h, utilization7d, limitStatus, cost5h, cost7d, cacheAge, has7dLimit, providerType } = data;
   const { localCredits5h, localCredits7d, context } = data;
   const displayMode = config.displayMode;
-  const { fmt: fmtCost } = costFormatter(providerType);
+  const fmtCost = costFormatter(providerType);
 
   if (dataSource === 'no-credentials') {
     return vscode.l10n.t('🤖 Not logged in');
@@ -105,8 +112,7 @@ export function buildLabel(
 
   // claude-ai and z-ai expose utilization windows; other providers (Bedrock, API key)
   // and any provider without live rate data (local-only) always use cost mode.
-  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
-  const useCostMode = !supportsRateLimit || dataSource === 'local-only' || displayMode === 'cost';
+  const useCostMode = !supportsRateLimit(providerType) || dataSource === 'local-only' || displayMode === 'cost';
 
   let part5h: string;
   let part7d: string;
@@ -147,9 +153,7 @@ export function buildLabel(
   // Context fill of the workspace's active session: absent when there is no fresh session,
   // so the segment simply hides. fillRatio is not clamped — an override below the real
   // fill shows its true 104%.
-  const ctxPart = context
-    ? `ctx ${Math.round(context.fillRatio * 100)}%${context.nearLimit ? '⚠' : ''}`
-    : '';
+  const ctxPart = context ? `ctx ${contextPercent(context)}` : '';
 
   // Project cost suffix
   let projectPart = '';
@@ -214,7 +218,7 @@ export function buildTooltip(
     cacheAge, dataSource, has7dLimit, providerType,
   } = data;
   const { localCredits5h, localCreditsDay, localCredits7d } = data;
-  const { fmt: fmtCost } = costFormatter(providerType);
+  const fmtCost = costFormatter(providerType);
 
   const tokenExpired = data.pollNotice === 'token-expired'
     ? vscode.l10n.t('Claude Code login token expired — any Claude Code request refreshes it')
@@ -238,9 +242,8 @@ export function buildTooltip(
   if (tokenExpired) { lines.push(tokenExpired, ''); }
 
   // Rate-limit section — claude-ai (Anthropic windows) and z-ai (quota), when live data exists
-  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
   const peak = peakStatus(now, providerType);
-  if (supportsRateLimit && dataSource !== 'local-only') {
+  if (supportsRateLimit(providerType) && dataSource !== 'local-only') {
     const title = providerType === 'z-ai' ? vscode.l10n.t('Z.AI Usage') : vscode.l10n.t('Claude Code Usage');
     const bar5h = buildBar(utilization5h, 8);
     lines.push(
@@ -312,8 +315,7 @@ function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
 
   // Providers without live rate-limit data don't get warning/error colors.
   // claude-ai and z-ai (when not in cost-only local mode) do.
-  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
-  if (!supportsRateLimit || dataSource === 'local-only') {
+  if (!supportsRateLimit(providerType) || dataSource === 'local-only') {
     item.backgroundColor = undefined;
     item.color = undefined;
     return;

@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { resolvePrimaryUnit, formatCredits, PrimaryUnitSetting } from '../../config';
+import type { ClaudeProvider } from '../../data/apiClient';
 
 suite('resolvePrimaryUnit', () => {
   test('auto follows the provider: credits for z-ai, usd for everyone else', () => {
@@ -28,6 +29,14 @@ suite('resolvePrimaryUnit', () => {
     assert.strictEqual(resolvePrimaryUnit('z-ai', 'AUTO' as PrimaryUnitSetting), 'credits');
     assert.strictEqual(resolvePrimaryUnit('z-ai', 'bogus' as PrimaryUnitSetting), 'credits');
     assert.strictEqual(resolvePrimaryUnit('claude-ai', 'bogus' as PrimaryUnitSetting), 'usd');
+  });
+
+  test('the provider check is an exact case-sensitive match', () => {
+    // providerType comes from our own credential detection, but the guard is cheap:
+    // lookalikes take the usd path instead of silently earning a credit tariff.
+    assert.strictEqual(resolvePrimaryUnit('' as ClaudeProvider, 'auto'), 'usd');
+    assert.strictEqual(resolvePrimaryUnit('Z-AI' as ClaudeProvider, 'auto'), 'usd');
+    assert.strictEqual(resolvePrimaryUnit(undefined as unknown as ClaudeProvider, 'auto'), 'usd');
   });
 });
 
@@ -68,6 +77,11 @@ suite('formatCredits', () => {
     assert.strictEqual(formatCredits(1_200_000), '§1.2M');
   });
 
+  test('the T tier and its exponential overflow keep the mantissa bounded', () => {
+    assert.strictEqual(formatCredits(1e12), '§1.0T');
+    assert.strictEqual(formatCredits(1e15), '§1.0e+3T'); // no higher tier — go exponential
+  });
+
   test('rounds half-up to the nearest whole credit before compacting', () => {
     // 999.5/999.6 round up to 1000 and cross the compact threshold; 741.4 rounds down.
     assert.strictEqual(formatCredits(999.5), '§1.0k');
@@ -79,6 +93,9 @@ suite('formatCredits', () => {
   test('non-finite and negative inputs render as §0 (fail-soft)', () => {
     assert.strictEqual(formatCredits(Number.NaN), '§0');
     assert.strictEqual(formatCredits(Number.POSITIVE_INFINITY), '§0');
+    assert.strictEqual(formatCredits(Number.NEGATIVE_INFINITY), '§0');
+    assert.strictEqual(formatCredits(undefined as unknown as number), '§0');
     assert.strictEqual(formatCredits(-5), '§0');
+    assert.strictEqual(formatCredits(-0), '§0'); // -0 is finite and not < 0 — must not print §-0
   });
 });

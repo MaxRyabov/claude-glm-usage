@@ -29,7 +29,9 @@ suite('package.json manifest hardening', () => {
   });
 
   test('display.primaryUnit setting is declared with the auto default', () => {
-    const setting = pkg.contributes.configuration.properties['claudeStatus.display.primaryUnit'];
+    // Optional chaining first: a broken manifest must fail with this message,
+    // not with a TypeError deep inside the property chain.
+    const setting = pkg.contributes?.configuration?.properties?.['claudeStatus.display.primaryUnit'];
     assert.ok(setting, 'claudeStatus.display.primaryUnit must exist');
     assert.deepStrictEqual(setting.enum, ['auto', 'credits', 'usd']);
     assert.strictEqual(setting.default, 'auto');

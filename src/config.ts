@@ -23,8 +23,8 @@ export function resolvePrimaryUnit(providerType: ClaudeProvider, setting: Primar
 
 /**
  * Credits with the § marker, compact like formatTokens: whole numbers below 1k, then
- * `§2.8k` / `§1.2M` / `§1.0B`. § is one glyph, never confused with $, and present in the
- * monospace status-bar fonts. Non-finite or negative inputs render as §0 (fail-soft:
+ * `§2.8k` / `§1.2M` / `§1.0B` / `§1.0T`. § is one glyph, never confused with $, and present
+ * in the monospace status-bar fonts. Non-finite or negative inputs render as §0 (fail-soft:
  * the status bar must not print §NaN). A value whose mantissa would round up to 1000.0
  * moves into the next tier, so §1000.0k / §1000.0M never print.
  */
@@ -39,9 +39,10 @@ export function formatCredits(n: number): string {
   return compact(1_000, 'k')
     ?? compact(1_000_000, 'M')
     ?? compact(1_000_000_000, 'B')
-    // The T tier is the last one — far beyond any real credit count; it exists only
-    // to keep the mantissa bounded on this side of Number.MAX_SAFE_INTEGER.
-    ?? `§${(r / 1_000_000_000_000).toFixed(1)}T`;
+    ?? compact(1_000_000_000_000, 'T')
+    // Past 999.95T no higher tier exists; exponential keeps the bounded-mantissa
+    // invariant (toFixed would print "1000.0T", and at ≥1e33 an "1e+21" style string).
+    ?? `§${(r / 1_000_000_000_000).toExponential(1)}T`;
 }
 
 export class ExtensionConfig {
