@@ -29,7 +29,7 @@ by plain spaces. Each optional segment hides when it has no data.
 🤖 5h:100%✗ · my-app:$3.21
 ```
 
-### z-ai in peak hours (UTC weekdays 06:00–10:00) with an active session
+### z-ai in peak hours (UTC weekdays 06:00–10:00)
 ```
 🤖 5h:12% 7d:3% ⚡ · ctx 38% · my-app:§2.8k
 ```
@@ -38,17 +38,18 @@ by plain spaces. Each optional segment hides when it has no data.
   alone — it never triggers a provider request. The window is defined in **UTC**:
   weekdays Mon–Fri, `[06:00, 10:00)` UTC (start inclusive, end exclusive) — the
   weekday and the hours come from the UTC calendar, not the machine zone. The
-  tooltip's `Peak …` line shows those same UTC boundaries converted to the local
-  time zone for convenience; DST transitions shift that local rendering but never
-  the window itself.
+  tooltip's `Peak …` line renders the window in the local time zone for
+  convenience: inside the window it names the local end time (`Peak until 13:00`),
+  outside it names the local boundaries (`Peak 09:00–13:00 (UTC+3)`); DST
+  transitions shift that local rendering but never the window itself.
 - `ctx 38%` — context fill of the workspace's active session (last turn's
   input + cache_read + cache_creation vs the model's context window). Hidden when
   there is no fresh (< 6 h, `ACTIVE_SESSION_FRESHNESS_MS` in
   `src/data/entryCache.ts`) session. `⚠` appears at the auto-compact edge
   (window − `CONTEXT_WARN_MARGIN_TOKENS` = 20k tokens, capped at 10% of the
   window; both are fixed constants in `src/data/contextFill.ts`, not settings),
-  e.g. `ctx 93%⚠`; an override below the real fill shows
-  its true value (`ctx 104%`) without clamping.
+  e.g. `ctx 93%⚠`; a `CLAUDE_CODE_MAX_CONTEXT_TOKENS` override set below the real
+  fill shows its true value (`ctx 104%`) without clamping.
 - `§2.8k` — the cost segment follows `claudeStatus.display.primaryUnit`
   (`auto | credits | usd`, default `auto`): credits (§) for z-ai, dollars ($)
   for everyone else; explicit `credits` degrade to dollars on providers without
@@ -76,6 +77,13 @@ by plain spaces. Each optional segment hides when it has no data.
 ### No credentials
 ```
 🤖 Not logged in
+```
+
+### Rejected credentials (auth-rejected)
+```
+🤖 Access refused      ← claude-ai, HTTP 403
+🤖 Login rejected      ← claude-ai, other auth failures
+🤖 API key rejected    ← any other provider
 ```
 
 Degraded states (`no-credentials`, `no-data`, `auth-rejected`) never show the
@@ -130,6 +138,7 @@ Use VSCode theme color IDs (not hardcoded hex):
 | Denied (100%) | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
 | Stale data | — | `descriptionForeground` (dimmed) |
 | No credentials | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
+| Rejected credentials (auth-rejected) | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
 | Non-claude-ai | — | — (default) |
 
 ```typescript

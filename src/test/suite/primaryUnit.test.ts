@@ -50,7 +50,8 @@ suite('formatCredits', () => {
 
   test('the k suffix switches exactly at 1000', () => {
     assert.strictEqual(formatCredits(1000), '§1.0k');
-    assert.strictEqual(formatCredits(1001), '§1.0k');
+    assert.strictEqual(formatCredits(1001), '§1.0k'); // mantissa rounding: 1.001 → 1.0
+    assert.strictEqual(formatCredits(1500), '§1.5k'); // a mantissa visibly above the threshold
   });
 
   test('thousands compact with the k suffix', () => {

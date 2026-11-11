@@ -4,6 +4,11 @@ import { ClaudeUsageData } from '../../data/dataManager';
 import { ContextFill } from '../../data/contextFill';
 import { isPeakAt } from '../../data/peakHours';
 
+// 2026-11-11 is a Wednesday: 07:00 UTC is inside the peak window, 12:00 UTC outside.
+// Injecting the moment keeps the peak assertions deterministic on any machine/CI clock.
+const PEAK_NOW = new Date(Date.UTC(2026, 10, 11, 7, 0));
+const OFFPEAK_NOW = new Date(Date.UTC(2026, 10, 11, 12, 0));
+
 function makeData(overrides: Partial<ClaudeUsageData> = {}): ClaudeUsageData {
   return {
     utilization5h: 0.5,
@@ -164,7 +169,10 @@ suite('StatusBar', () => {
     // Cost mode with localCredits as the source: the cost windows render in §, not $ —
     // the usd overrides (cost5h 1.23 / cost7d 10) are here to prove the dollar values
     // are NOT what the label shows (primaryUnit spec, auto → credits for z-ai).
-    const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'local-only', cost5h: 1.23, cost7d: 10 }));
+    const label = buildLabel(
+      makeData({ providerType: 'z-ai', dataSource: 'local-only', cost5h: 1.23, cost7d: 10 }),
+      [], OFFPEAK_NOW,
+    );
     // Digit-boundary assertions: a bare includes('5h:§3') would also pass for §34,
     // and (?!\d) would still pass for §3.5 — the point excludes the fraction dot too.
     assert.match(label, /5h:§3(?![\d.])/, `expected the credit cost window (localCredits5h 2.8 → §3): ${label}`);
@@ -259,11 +267,6 @@ suite('Refused, missing and expired credentials', () => {
     assert.strictEqual(buildLabel(makeData({ dataSource: 'no-data' })), '🤖 Claude: run refresh');
   });
 });
-
-// 2026-11-11 is a Wednesday: 07:00 UTC is inside the peak window, 12:00 UTC outside.
-// Injecting the moment keeps the peak assertions deterministic on any machine/CI clock.
-const PEAK_NOW = new Date(Date.UTC(2026, 10, 11, 7, 0));
-const OFFPEAK_NOW = new Date(Date.UTC(2026, 10, 11, 12, 0));
 
 function makeContext(fillRatio: number, nearLimit: boolean): ContextFill {
   return {
@@ -434,9 +437,10 @@ suite('Peak tooltip', () => {
   test('outside the peak the tooltip names the local window bounds', () => {
     const tip = buildTooltip(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
     // Local times depend on the machine zone, so match the shape: "Peak 09:00–13:00
-    // (UTC+3)". The offset itself may carry half-hours ("UTC+3:30"), so it is not
-    // closed with a digit here.
-    assert.match(tip, /Peak \d{2}:\d{2}–\d{2}:\d{2} \(UTC[+-]/, `Expected window bounds:\n${tip}`);
+    // (UTC+3)". A machine running in UTC itself renders the bare "UTC" without any
+    // sign (Intl shortOffset), and the offset may carry half-hours ("UTC+3:30"),
+    // so the offset is optional here and not closed with a digit.
+    assert.match(tip, /Peak \d{2}:\d{2}–\d{2}:\d{2} \(UTC(?:[+-]\d)?\)/, `Expected window bounds:\n${tip}`);
   });
 
   test('claude-ai tooltip has no peak line', () => {
