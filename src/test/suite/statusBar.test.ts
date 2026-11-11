@@ -438,9 +438,9 @@ suite('Peak tooltip', () => {
     const tip = buildTooltip(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
     // Local times depend on the machine zone, so match the shape: "Peak 09:00–13:00
     // (UTC+3)". A machine running in UTC itself renders the bare "UTC" without any
-    // sign (Intl shortOffset), and the offset may carry half-hours ("UTC+3:30"),
-    // so the offset is optional here and not closed with a digit.
-    assert.match(tip, /Peak \d{2}:\d{2}–\d{2}:\d{2} \(UTC(?:[+-]\d)?\)/, `Expected window bounds:\n${tip}`);
+    // sign (Intl shortOffset); offsets may be two-digit ("UTC+10") or fractional
+    // ("UTC+5:30") — the offset group is optional and covers all three shapes.
+    assert.match(tip, /Peak \d{2}:\d{2}–\d{2}:\d{2} \(UTC(?:[+-]\d{1,2}(?::\d{2})?)?\)/, `Expected window bounds:\n${tip}`);
   });
 
   test('claude-ai tooltip has no peak line', () => {

@@ -38,6 +38,11 @@ by plain spaces. Each optional segment hides when it has no data.
   alone — it never triggers a provider request. The window is defined in **UTC**:
   weekdays Mon–Fri, `[06:00, 10:00)` UTC (start inclusive, end exclusive) — the
   weekday and the hours come from the UTC calendar, not the machine zone. The
+  boundaries live in the `PEAK_START_UTC_MIN`/`PEAK_END_UTC_MIN` constants in
+  `src/data/peakHours.ts` (the z.ai coding-plan tariff schedule is the source of
+  truth — if the provider changes its hours, a release is needed); the window
+  math, including the local rendering across DST, is covered by
+  `src/test/suite/peakHours.test.ts`. The
   tooltip's `Peak …` line renders the window in the local time zone for
   convenience: inside the window it names the local end time (`Peak until 13:00`),
   outside it names the local boundaries (`Peak 09:00–13:00 (UTC+3)`); DST
@@ -63,7 +68,7 @@ by plain spaces. Each optional segment hides when it has no data.
 🤖 5h:78% 7d:84% [1d 3h ago] · my-app:$3.21  ← days   (≥ 24 h)
 ```
 
-### Cost mode (non-claude-ai provider, or `displayMode: "cost"`)
+### Cost mode (`displayMode: "cost"`, or local-only without a quota cache)
 ```
 🤖 5h:$14.21 7d:$53.17 · my-app:$3.21        ← primary unit usd
 🤖 5h:§2.8k 7d:§9.1k · my-app:§2.8k          ← primary unit credits (z-ai)
@@ -145,7 +150,9 @@ Use VSCode theme color IDs (not hardcoded hex):
 function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
   const { limitStatus, dataSource, providerType } = data
 
-  if (dataSource === 'no-credentials') {
+  // A refused credential is the user's problem to fix, so it gets the error colour
+  // rather than the muted one used for data that is merely stale.
+  if (dataSource === 'no-credentials' || dataSource === 'auth-rejected') {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     item.color = new vscode.ThemeColor('statusBarItem.errorForeground')
     return
@@ -155,8 +162,9 @@ function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
     item.color = new vscode.ThemeColor('descriptionForeground')
     return
   }
-  // Non-claude-ai providers: no warning/error colors
-  if (providerType !== 'claude-ai') {
+  // Providers without live rate-limit data don't get warning/error colors.
+  // claude-ai and z-ai (when not in cost-only local mode) do.
+  if (!supportsRateLimit(providerType) || dataSource === 'local-only') {
     item.backgroundColor = undefined
     item.color = undefined
     return
