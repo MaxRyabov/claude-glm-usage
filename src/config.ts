@@ -13,23 +13,30 @@ export type PrimaryUnit = 'credits' | 'usd';
  * Resolve the primary cost-display unit. `auto` follows the provider (credits for z-ai,
  * dollars for everyone else); an explicit `credits` is defined only for z-ai and degrades
  * to dollars elsewhere — no other provider has a credit tariff to convert to. An unknown
- * setting value (hand-edited settings.json) reads as `auto`, the declared default.
+ * setting value (hand-edited settings.json) reads as `auto`, the declared default, so both
+ * non-usd settings resolve through the same provider check.
  */
-export function resolvePrimaryUnit(providerType: string, setting: PrimaryUnitSetting): PrimaryUnit {
+export function resolvePrimaryUnit(providerType: ClaudeProvider, setting: PrimaryUnitSetting): PrimaryUnit {
   if (setting === 'usd') { return 'usd'; }
-  if (setting === 'credits') { return providerType === 'z-ai' ? 'credits' : 'usd'; }
   return providerType === 'z-ai' ? 'credits' : 'usd';
 }
 
 /**
  * Credits with the § marker, compact like formatTokens: whole numbers below 1k, then
  * `§2.8k` / `§1.2M`. § is one glyph, never confused with $, and present in the
- * monospace status-bar fonts.
+ * monospace status-bar fonts. Non-finite or negative inputs render as §0 (fail-soft:
+ * the status bar must not print §NaN).
  */
 export function formatCredits(n: number): string {
+  if (!Number.isFinite(n) || n < 0) { return '§0'; }
   const r = Math.round(n);
-  if (r >= 1_000_000) { return `§${(n / 1_000_000).toFixed(1)}M`; }
-  if (r >= 1_000) { return `§${(n / 1_000).toFixed(1)}k`; }
+  if (r >= 1_000_000) { return `§${(r / 1_000_000).toFixed(1)}M`; }
+  if (r >= 1_000) {
+    const k = (r / 1_000).toFixed(1);
+    // toFixed rounds 999.95+ up to "1000.0" — carry that into the M tier so the
+    // mantissa never prints a five-digit §1000.0k.
+    return k === '1000.0' ? '§1.0M' : `§${k}k`;
+  }
   return `§${r}`;
 }
 

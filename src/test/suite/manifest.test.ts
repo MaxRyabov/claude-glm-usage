@@ -35,7 +35,9 @@ suite('package.json manifest hardening', () => {
     assert.strictEqual(setting.default, 'auto');
     assert.strictEqual(setting.type, 'string');
     // enumDescriptions must stay aligned with enum length (parity of the nls keys
-    // themselves is enforced by the locale suite).
+    // themselves is enforced by the locale suite). An Array.isArray guard first, so a
+    // broken manifest fails with a message instead of a TypeError.
+    assert.ok(Array.isArray(setting.enumDescriptions), 'enumDescriptions must be an array');
     assert.strictEqual(setting.enum.length, setting.enumDescriptions.length);
   });
 

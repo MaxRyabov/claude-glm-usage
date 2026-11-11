@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import { buildLabel, buildTooltip, formatDuration } from '../../statusBar';
 import { ClaudeUsageData } from '../../data/dataManager';
 import { ContextFill } from '../../data/contextFill';
+import { isPeakAt } from '../../data/peakHours';
 
 function makeData(overrides: Partial<ClaudeUsageData> = {}): ClaudeUsageData {
   return {
@@ -162,8 +163,9 @@ suite('StatusBar', () => {
   test('z-ai provider uses cost mode in the label (no rate %)', () => {
     // auto unit → credits for z-ai: the cost windows render in §, not $ (primaryUnit spec).
     const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'local-only', cost5h: 1.23, cost7d: 10 }));
-    assert.ok(label.includes('5h:§3'), `Expected credit cost in: ${label}`);
-    assert.ok(label.includes('7d:§44'), `Expected credit cost in: ${label}`);
+    // Digit-boundary assertions: a bare includes('5h:§3') would also pass for §34.
+    assert.match(label, /5h:§3(?!\d)/);
+    assert.match(label, /7d:§44(?!\d)/);
     assert.ok(!label.includes('%'), `Expected no rate percentage in: ${label}`);
   });
 
@@ -271,6 +273,15 @@ function makeContext(fillRatio: number, nearLimit: boolean): ContextFill {
 }
 
 suite('Peak marker (⚡)', () => {
+  test('the injected fixtures really sit inside/outside the peak window', () => {
+    // Anchors the hardcoded dates to the live peak rule: if the window definition in
+    // peakHours.ts ever changes, this fails with a clear cause instead of letting the
+    // tests below silently verify the wrong scenario. Window boundaries themselves are
+    // covered by peakHours.test.ts.
+    assert.ok(isPeakAt(PEAK_NOW.getTime()), 'PEAK_NOW must be inside the peak window');
+    assert.ok(!isPeakAt(OFFPEAK_NOW.getTime()), 'OFFPEAK_NOW must be outside the peak window');
+  });
+
   test('z-ai inside the window shows ⚡ next to the quota windows', () => {
     const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], PEAK_NOW);
     assert.ok(label.includes('7d:30% ⚡'), `Expected ⚡ after the quota windows: ${label}`);
@@ -298,11 +309,13 @@ suite('Peak marker (⚡)', () => {
 
   test('rendering the peak segment issues no provider requests', () => {
     // peakStatus is pure date math; the guard catches anyone wiring the badge to a fetch.
+    // The stub RESOLVES (a throwing stub would leave an unhandled rejection that can
+    // take down the whole mocha run if the code ever forgets to await the call).
     let calls = 0;
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async () => {
       calls++;
-      throw new Error('status-bar rendering must not fetch');
+      return new Response('{}', { status: 200 });
     }) as typeof fetch;
     try {
       const data = makeData({ providerType: 'z-ai', dataSource: 'cache' });
@@ -344,7 +357,7 @@ suite('Context segment (ctx NN%)', () => {
 
   test('no fresh session hides the segment', () => {
     const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
-    assert.ok(!label.includes('ctx'), `Expected no ctx segment: ${label}`);
+    assert.doesNotMatch(label, /ctx \d+%/, `Expected no ctx segment: ${label}`);
   });
 });
 
@@ -354,8 +367,8 @@ suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
       makeData({ providerType: 'z-ai', dataSource: 'cache' }),
       [mockProject], OFFPEAK_NOW,
     );
-    assert.ok(label.includes('my-app:§9'), `Expected credits for z-ai (creditsToday 9.1): ${label}`);
-    assert.ok(!label.includes('$'), `No dollar cost for z-ai in credit mode: ${label}`);
+    assert.match(label, /my-app:§9(?!\d)/, `Expected credits for z-ai (creditsToday 9.1): ${label}`);
+    assert.doesNotMatch(label, /\$\d/, `No dollar cost for z-ai in credit mode: ${label}`);
   });
 
   test('claude-ai project segment stays in dollars', () => {
@@ -384,7 +397,7 @@ suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
       makeData({ providerType: 'z-ai', dataSource: 'cache' }),
       [mockProject, second], OFFPEAK_NOW,
     );
-    assert.ok(label.includes('PJ:§13'), `Expected aggregated credits (9.1 + 4.0): ${label}`);
+    assert.match(label, /PJ:§13(?!\d)/, `Expected aggregated credits (9.1 + 4.0): ${label}`);
   });
 
   test('segments are joined with the · separator', () => {
@@ -393,7 +406,7 @@ suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
       [mockProject], OFFPEAK_NOW,
     );
     assert.ok(label.includes('ctx 38% · my-app:'), `Expected · between segments: ${label}`);
-    assert.ok(!label.includes('|'), `The old | separator is gone: ${label}`);
+    assert.doesNotMatch(label, / \| /, `The old | separator is gone: ${label}`);
   });
 });
 
@@ -405,8 +418,10 @@ suite('Peak tooltip', () => {
 
   test('outside the peak the tooltip names the local window bounds', () => {
     const tip = buildTooltip(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
-    // Local times depend on the machine zone, so match the shape: "Peak 09:00–13:00 (UTC+3)".
-    assert.ok(/Peak \d{2}:\d{2}–\d{2}:\d{2} \(UTC[+-]\d/.test(tip), `Expected window bounds:\n${tip}`);
+    // Local times depend on the machine zone, so match the shape: "Peak 09:00–13:00
+    // (UTC+3)". The offset itself may carry half-hours ("UTC+3:30"), so it is not
+    // closed with a digit here.
+    assert.match(tip, /Peak \d{2}:\d{2}–\d{2}:\d{2} \(UTC[+-]/, `Expected window bounds:\n${tip}`);
   });
 
   test('claude-ai tooltip has no peak line', () => {
@@ -419,7 +434,9 @@ suite('Peak tooltip', () => {
       makeData({ providerType: 'z-ai', dataSource: 'local-only', localCreditsDay: 11.2 }),
       [mockProject], OFFPEAK_NOW,
     );
-    assert.ok(tip.includes('day:  §11'), `Expected credits in the cost section:\n${tip}`);
-    assert.ok(tip.includes('§9'), `Expected project credits (creditsToday 9.1):\n${tip}`);
+    // Padding-independent shape with a digit boundary (a bare includes('§11') would
+    // also pass for §110).
+    assert.match(tip, /day:\s+§11(?!\d)/, `Expected credits in the cost section:\n${tip}`);
+    assert.match(tip, /§9(?!\d)/, `Expected project credits (creditsToday 9.1):\n${tip}`);
   });
 });

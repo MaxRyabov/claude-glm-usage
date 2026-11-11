@@ -9,8 +9,9 @@ Lightweight, non-blocking, updates automatically.
 
 ## Display Format
 
-Segments are joined with ` · ` (middle dot). Order: quota windows → peak badge →
-context → project cost. Each optional segment hides when it has no data.
+The ` · ` (middle dot) separates the major segments — [quota windows + peak badge] →
+context → project cost. Inside the first group the windows and the ⚡ badge are joined
+by plain spaces. Each optional segment hides when it has no data.
 
 ### Percent mode (claude-ai provider, `displayMode: "percent"`)
 
@@ -70,7 +71,10 @@ context → project cost. Each optional segment hides when it has no data.
 ```
 
 Degraded states (`no-credentials`, `no-data`, `auth-rejected`) never show the
-peak badge or the context segment.
+peak badge or the context segment. `no-data` means no quota cache **and** no local
+JSONL cost data — the whole label is replaced. A z-ai window without a quota cache
+but with local cost data (`local-only`) is not degraded: it shows the cost windows,
+the ⚡ badge and the context segment as usual.
 
 ---
 
@@ -82,7 +86,7 @@ peak badge or the context segment.
 | `claude-ai`, API disabled, cache exists | Yes (stale) | percent with `[X ago]` (m / h / d) | never | usd |
 | `claude-ai`, API disabled, no cache | No | cost only | never | usd |
 | `z-ai`, API enabled | Yes (quota) | percent (default) or cost | only in peak window | credits (auto) |
-| `z-ai`, API disabled / no cache | No | cost only | only in peak window | credits (auto) |
+| `z-ai`, API disabled / no quota cache (local cost data present) | No | cost only (local-only) | only in peak window | credits (auto) |
 | `aws-bedrock` / `api-key` / `unknown` | No | cost only (always) | never | usd |
 
 ---
