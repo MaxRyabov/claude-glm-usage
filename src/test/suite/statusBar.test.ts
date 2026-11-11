@@ -161,11 +161,13 @@ suite('StatusBar', () => {
   });
 
   test('z-ai provider uses cost mode in the label (no rate %)', () => {
-    // auto unit → credits for z-ai: the cost windows render in §, not $ (primaryUnit spec).
+    // Cost mode with localCredits as the source: the cost windows render in §, not $ —
+    // the usd overrides (cost5h 1.23 / cost7d 10) are here to prove the dollar values
+    // are NOT what the label shows (primaryUnit spec, auto → credits for z-ai).
     const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'local-only', cost5h: 1.23, cost7d: 10 }));
     // Digit-boundary assertions: a bare includes('5h:§3') would also pass for §34.
-    assert.match(label, /5h:§3(?!\d)/);
-    assert.match(label, /7d:§44(?!\d)/);
+    assert.match(label, /5h:§3(?!\d)/, `expected the credit cost window (localCredits5h 2.8 → §3): ${label}`);
+    assert.match(label, /7d:§44(?!\d)/, `expected the credit cost window (localCredits7d 44 → §44): ${label}`);
     assert.ok(!label.includes('%'), `Expected no rate percentage in: ${label}`);
   });
 
@@ -359,6 +361,16 @@ suite('Context segment (ctx NN%)', () => {
     const label = buildLabel(makeData({ providerType: 'z-ai', dataSource: 'cache' }), [], OFFPEAK_NOW);
     assert.doesNotMatch(label, /ctx \d+%/, `Expected no ctx segment: ${label}`);
   });
+
+  test('the tooltip mirrors the segment as a line (Accessibility)', () => {
+    // The label-only segment would be invisible to tooltip readers: contextLine()
+    // repeats it inside the tooltip, above the Token Cost section.
+    const tip = buildTooltip(
+      makeData({ providerType: 'z-ai', dataSource: 'cache', context: makeContext(0.93, true) }),
+      [], OFFPEAK_NOW,
+    );
+    assert.match(tip, /Context: 93%⚠/, `Expected a context line in the tooltip:\n${tip}`);
+  });
 });
 
 suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
@@ -367,7 +379,7 @@ suite('Primary unit (claudeStatus.display.primaryUnit)', () => {
       makeData({ providerType: 'z-ai', dataSource: 'cache' }),
       [mockProject], OFFPEAK_NOW,
     );
-    assert.match(label, /my-app:§9(?!\d)/, `Expected credits for z-ai (creditsToday 9.1): ${label}`);
+    assert.match(label, /my-app:§9(?![\d.])/, `Expected credits for z-ai (creditsToday 9.1): ${label}`);
     assert.doesNotMatch(label, /\$\d/, `No dollar cost for z-ai in credit mode: ${label}`);
   });
 
@@ -434,9 +446,9 @@ suite('Peak tooltip', () => {
       makeData({ providerType: 'z-ai', dataSource: 'local-only', localCreditsDay: 11.2 }),
       [mockProject], OFFPEAK_NOW,
     );
-    // Padding-independent shape with a digit boundary (a bare includes('§11') would
-    // also pass for §110).
-    assert.match(tip, /day:\s+§11(?!\d)/, `Expected credits in the cost section:\n${tip}`);
-    assert.match(tip, /§9(?!\d)/, `Expected project credits (creditsToday 9.1):\n${tip}`);
+    // Padding-independent shape with a digit+dot boundary (a bare includes('§11')
+    // would also pass for §110 and §11.2), anchored to the line it belongs to.
+    assert.match(tip, /day:\s+§11(?![\d.])/, `Expected credits in the cost section:\n${tip}`);
+    assert.match(tip, /Today: §9(?![\d.])/, `Expected project credits (creditsToday 9.1):\n${tip}`);
   });
 });

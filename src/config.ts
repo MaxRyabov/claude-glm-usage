@@ -23,21 +23,25 @@ export function resolvePrimaryUnit(providerType: ClaudeProvider, setting: Primar
 
 /**
  * Credits with the § marker, compact like formatTokens: whole numbers below 1k, then
- * `§2.8k` / `§1.2M`. § is one glyph, never confused with $, and present in the
+ * `§2.8k` / `§1.2M` / `§1.0B`. § is one glyph, never confused with $, and present in the
  * monospace status-bar fonts. Non-finite or negative inputs render as §0 (fail-soft:
- * the status bar must not print §NaN).
+ * the status bar must not print §NaN). A value whose mantissa would round up to 1000.0
+ * moves into the next tier, so §1000.0k / §1000.0M never print.
  */
 export function formatCredits(n: number): string {
   if (!Number.isFinite(n) || n < 0) { return '§0'; }
   const r = Math.round(n);
-  if (r >= 1_000_000) { return `§${(r / 1_000_000).toFixed(1)}M`; }
-  if (r >= 1_000) {
-    const k = (r / 1_000).toFixed(1);
-    // toFixed rounds 999.95+ up to "1000.0" — carry that into the M tier so the
-    // mantissa never prints a five-digit §1000.0k.
-    return k === '1000.0' ? '§1.0M' : `§${k}k`;
-  }
-  return `§${r}`;
+  if (r < 1_000) { return `§${r}`; }
+  // Numeric thresholds, not string-matching toFixed output: toFixed(1) rounds the
+  // mantissa up to "1000.0" from 999.95 of a tier's unit onwards.
+  const compact = (div: number, suffix: string): string | null =>
+    r / div < 999.95 ? `§${(r / div).toFixed(1)}${suffix}` : null;
+  return compact(1_000, 'k')
+    ?? compact(1_000_000, 'M')
+    ?? compact(1_000_000_000, 'B')
+    // The T tier is the last one — far beyond any real credit count; it exists only
+    // to keep the mantissa bounded on this side of Number.MAX_SAFE_INTEGER.
+    ?? `§${(r / 1_000_000_000_000).toFixed(1)}T`;
 }
 
 export class ExtensionConfig {

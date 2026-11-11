@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ClaudeUsageData, ProjectCostData } from './data/dataManager';
 import { peakStatus, PeakStatus } from './data/peakHours';
+import { ContextFill } from './data/contextFill';
 import { config, resolvePrimaryUnit, formatCredits, PrimaryUnit } from './config';
 
 export function formatDuration(seconds: number): string {
@@ -60,6 +61,15 @@ function peakLine(peak: PeakStatus): string {
   return peak.active
     ? vscode.l10n.t('Peak until {0}', peak.windowEndLocal)
     : vscode.l10n.t('Peak {0}–{1} ({2})', peak.windowStartLocal, peak.windowEndLocal, peak.tzLabel);
+}
+
+/**
+ * One tooltip line with the context fill — the tooltip must convey everything the label
+ * shows (Accessibility), so the ctx segment gets a line of its own.
+ */
+function contextLine(context: ContextFill): string {
+  const pct = `${Math.round(context.fillRatio * 100)}%${context.nearLimit ? '⚠' : ''}`;
+  return vscode.l10n.t('Context: {0}', pct);
 }
 
 export function buildLabel(
@@ -256,6 +266,11 @@ export function buildTooltip(
       '─────────────────────────────',
       '',
     );
+  }
+
+  // Context fill — the tooltip conveys everything the label shows (Accessibility).
+  if (data.context) {
+    lines.push(contextLine(data.context), '');
   }
 
   lines.push(

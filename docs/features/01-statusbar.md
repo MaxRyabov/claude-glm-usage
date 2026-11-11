@@ -86,6 +86,7 @@ the ⚡ badge and the context segment as usual.
 | `claude-ai`, API disabled, cache exists | Yes (stale) | percent with `[X ago]` (m / h / d) | never | usd |
 | `claude-ai`, API disabled, no cache | No | cost only | never | usd |
 | `z-ai`, API enabled | Yes (quota) | percent (default) or cost | only in peak window | credits (auto) |
+| `z-ai`, API disabled, cache exists | Yes (stale, quota) | percent with `[X ago]` (m / h / d) | only in peak window | credits (auto) |
 | `z-ai`, API disabled / no quota cache (local cost data present) | No | cost only (local-only) | only in peak window | credits (auto) |
 | `aws-bedrock` / `api-key` / `unknown` | No | cost only (always) | never | usd |
 
@@ -191,14 +192,16 @@ Peak until 13:00            ← inside the peak window (local time)
 5h window:   12% [X........] resets in 3h 05m
 7d window:   3%  [.........] resets in 6d 2h
 
+Context: 38%                ← mirrors the ctx segment (hidden without a fresh session)
+
 Token Cost (local)
 ─────────────────────────────
 5h:   in:38.5K out:127.8K  §2.8k
-day:  §11
-7d:   §44
+day:  §11.0k
+7d:   §44.0k
 
 Project: my-app
-  Today: §9.1  |  7d: §51
+  Today: §2.8k  |  7d: §41.0k
 
 Last updated: just now
 Click to open dashboard →

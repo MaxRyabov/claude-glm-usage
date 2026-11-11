@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { resolvePrimaryUnit, formatCredits } from '../../config';
+import { resolvePrimaryUnit, formatCredits, PrimaryUnitSetting } from '../../config';
 
 suite('resolvePrimaryUnit', () => {
   test('auto follows the provider: credits for z-ai, usd for everyone else', () => {
@@ -19,6 +19,15 @@ suite('resolvePrimaryUnit', () => {
   test('credits degrade to usd for a provider without a credit tariff', () => {
     assert.strictEqual(resolvePrimaryUnit('claude-ai', 'credits'), 'usd');
     assert.strictEqual(resolvePrimaryUnit('aws-bedrock', 'credits'), 'usd');
+  });
+
+  test('a non-usd garbage setting resolves through the provider path', () => {
+    // The setting value is validated in the primaryUnitSetting getter (normalized to
+    // auto); the resolver itself must also be robust to a value that slipped through —
+    // anything but an explicit usd takes the provider check, case-sensitively.
+    assert.strictEqual(resolvePrimaryUnit('z-ai', 'AUTO' as PrimaryUnitSetting), 'credits');
+    assert.strictEqual(resolvePrimaryUnit('z-ai', 'bogus' as PrimaryUnitSetting), 'credits');
+    assert.strictEqual(resolvePrimaryUnit('claude-ai', 'bogus' as PrimaryUnitSetting), 'usd');
   });
 });
 
@@ -46,6 +55,13 @@ suite('formatCredits', () => {
     assert.strictEqual(formatCredits(999_950), '§1.0M');
     assert.strictEqual(formatCredits(999_999), '§1.0M');
     assert.strictEqual(formatCredits(1_000_000), '§1.0M');
+  });
+
+  test('the same carry applies inside the M tier', () => {
+    // (999_999_999 / 1e6).toFixed(1) is "1000.0" — the M tier must hand it over to B.
+    assert.strictEqual(formatCredits(999_949_999), '§999.9M');
+    assert.strictEqual(formatCredits(999_950_000), '§1.0B');
+    assert.strictEqual(formatCredits(1_000_000_000), '§1.0B');
   });
 
   test('millions compact with the M suffix', () => {
