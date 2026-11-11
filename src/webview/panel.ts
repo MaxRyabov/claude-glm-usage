@@ -51,13 +51,16 @@ export interface DashboardReconcile {
   quotaUsed: number
 }
 
+/** The quota window length (5h) in ms — the tariff constant behind quotaWindowStartMs. */
+const QUOTA_WINDOW_MS = 5 * 3600 * 1000;
+
 /**
  * Start of the quota window in ms: `reset5hAt − 5h`, i.e. `now + resetIn5h − 5h`. The
  * reconciliation line counts local credits over THIS window — aligned with the quota —
  * not over the rolling five hours, which ends earlier by exactly `resetIn5h`.
  */
 export function quotaWindowStartMs(resetIn5hSec: number, nowMs: number): number {
-  return nowMs + resetIn5hSec * 1000 - 5 * 3600 * 1000;
+  return nowMs + resetIn5hSec * 1000 - QUOTA_WINDOW_MS;
 }
 
 /** § summed over the entries at or after `windowStartMs` — the pure core of the reconciliation. */
