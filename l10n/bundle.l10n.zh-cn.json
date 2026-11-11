@@ -125,6 +125,6 @@
   "Now": "当前",
   "{0} cr/hr": "{0} 积分/时",
   "local {0} · quota {1} over 5h": "本地 {0} · 配额 {1}（5小时）",
-  "5h credits left": "剩余积分（5h）",
+  "5h credits left": "剩余积分（5小时）",
   "The 5h window will not be exhausted before the reset.": "5 小时窗口在重置前不会被耗尽。"
 }

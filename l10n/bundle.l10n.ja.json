@@ -125,6 +125,6 @@
   "Now": "現在",
   "{0} cr/hr": "{0} クレジット/時",
   "local {0} · quota {1} over 5h": "ローカル {0} · クォータ {1}（5時間）",
-  "5h credits left": "残りクレジット（5h）",
+  "5h credits left": "残りクレジット（5時間）",
   "The 5h window will not be exhausted before the reset.": "5時間ウィンドウはリセット前に使い切られません。"
 }

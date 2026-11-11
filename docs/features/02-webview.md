@@ -224,9 +224,11 @@ The first card renders the quota windows plus, when their data is present:
 
 A `claudeStatus.display.primaryUnit` change re-renders an open panel at once:
 `makeConfigChangeHandler` (`src/webview/panel.ts`) subscribes the panel to
-`onDidChangeConfiguration` and pushes a fresh `update` built from the last data — no data
-cycle, no provider request. The status bar re-renders through its own handler in
-`extension.ts`.
+`onDidChangeConfiguration` and pushes a fresh `update` built through
+`rebuildUnitsPayload` from the last gathered payload input with the *current* setting —
+`units` is resolved from the live `config.primaryUnitSetting` getter on every build, so
+the message carries the new unit. No data cycle, no provider request, no JSONL walk. The
+status bar re-renders through its own handler in `extension.ts`.
 
 ### WebView → Extension
 

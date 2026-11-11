@@ -14,12 +14,15 @@ Also supports a user-defined USD budget with its own alert threshold.
 
 Use a sliding window of the **last 30 minutes** of JSONL entries — one engine, two units.
 The same window yields USD/hour and z.ai credits/hour, so the two numbers a dashboard
-shows next to each other can never diverge:
+shows next to each other can never diverge. § below denotes z.ai credits — the glyph the
+UI prefixes to credit amounts:
 
 ```typescript
 export function calculateBurnRate(entries: ReadonlyArray<{ timestamp: number; cost: number }>): number
 export function calculateCreditsBurnRate(entries: ReadonlyArray<{ timestamp: number; credits: number }>): number
-// Both: fewer than 2 turns → 0; otherwise sum ÷ (now − first turn), per hour.
+// Both: fewer than 2 turns → 0; otherwise sum ÷ (now − earliest turn), per hour.
+// The engine (readRecentTurns) feeds them timestamp-sorted turns, so entries[0] is
+// always the earliest turn of the window.
 ```
 
 Turns are read from the main session files **and** `<session>/subagents/*.jsonl` — without
@@ -42,7 +45,10 @@ export interface PredictionInput {
                                //   claude-ai, locally counted credits5h for z-ai
   costToday: number            // USD, for the budget path
   dailyBudget: number | null
-  fallbackUnit?: 'usd' | 'credits'  // unit of spend5h and of the fallback burn rate
+  fallbackUnit?: 'usd' | 'credits'  // unit of spend5h and of the fallback burn rate;
+                               //   default 'usd'. z-ai passes 'credits' (spend5h is the
+                               //   locally counted window credits). A unit mismatched
+                               //   against the real spend5h silently yields a meaningless time.
   quotaCredits?: QuotaAmounts | null  // live z.ai quota with absolute amounts — pass it
                                //   only when actsOnRateData admits the data: a stale
                                //   remainder must not drive a forecast
@@ -50,25 +56,44 @@ export interface PredictionInput {
 }
 ```
 
-**Algorithm** (`predictFromTurns` in `src/data/prediction.ts`):
+Type locations: `QuotaAmounts` — `src/data/apiClient.ts` (`used`/`total` are required
+numbers, `remaining` optional); `actsOnRateData` — `src/data/pollOutcome.ts`;
+`PricingContext` — `src/data/jsonlReader.ts`; `PredictionData` — the engine's own return
+type below; `ClaudeUsageData` — `src/data/dataManager.ts`.
+
+**Algorithm** (`predictFromTurns` in `src/data/prediction.ts`). Steps 2–4 are mutually
+exclusive `if / else if` branches evaluated in this order: an exhausted utilization
+(step 2) sets its result and steps 3–4 never run; `quotaCredits` (step 3) beats the
+utilization fallback (step 4):
 
 1. Read the turns of the last 30 minutes; compute `burnRateUsdPerHour` and
    `burnRateCreditsPerHour` from them.
-2. If `utilization5h >= 1.0`: already exhausted → `estimatedExhaustionIn = 0`.
+2. If `utilization5h >= 1.0`: already exhausted → `estimatedExhaustionIn = 0`,
+   `rate-limit-reached` — the other branches do not run.
 3. **Quota-checked path** — live z.ai quota with absolute amounts (`quotaCredits`):
    - remaining = `quotaCredits.remaining ?? (quotaCredits.total − quotaCredits.used)`
-     — `remaining` is used exactly as reported, never recomputed;
+     — `remaining` is taken exactly as reported whenever the field is present
+     (including 0); the `total − used` derivation runs only when it is absent, and both
+     are required numbers on `QuotaAmounts`, so the result is always finite;
    - remaining ≤ 0 → the limit is reached now (`rate-limit-reached`);
    - credits burn rate 0 (no turns in the window) → **no exhaustion forecast at all**;
-   - `remaining / burn ≥ resetIn5h` → `exhaustsBeforeReset = false` and the
+   - `remaining / burn × 3600 ≥ resetIn5h` → `exhaustsBeforeReset = false` and the
      `survives-reset` recommendation: "The 5h window will not be exhausted before the
-     reset.";
+     reset." (burn is credits/hour, resetIn5h is seconds — compare seconds to seconds;
+     equality, exhaustion landing exactly at the reset, counts as surviving);
    - otherwise the exhaustion time is capped at `resetIn5h` (exhaustion can't happen
-     after the window resets), `creditsRemaining5h` carries the remaining §.
+     after the window resets), `creditsRemaining5h` carries the remaining credits (§).
 4. **Utilization fallback** — no absolute amounts: estimate capacity from
    `spend5h / utilization5h`, remaining share `× (1.0 − utilization5h)`, divide by the
    burn rate **in spend5h's own unit** (`fallbackUnit`), cap at `resetIn5h`.
-5. `safeToStartHeavyTask = effectiveSeconds > 1800` (30 min threshold).
+5. `safeToStartHeavyTask = effectiveSeconds > 1800` (30 min threshold), where
+   `effectiveSeconds = min(exhaustion estimate, resetIn5h)` — the seconds until whichever
+   comes first, exhaustion or the window reset (both branches above already cap at
+   `resetIn5h`, so effectiveSeconds equals the resulting `estimatedExhaustionIn`).
+
+Field units of `PredictionData`: `estimatedExhaustionIn` — seconds from now;
+`estimatedExhaustionTime` / `budgetExhaustionTime` — absolute `Date` moments;
+`currentBurnRate` / `burnRateCreditsPerHour` — per hour; `creditsRemaining5h` — §.
 
 One rate per window means the forecast errs up to 2× either way at the peak-window
 boundaries — leaving the peak it is pessimistic, entering it optimistic.
