@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { readSnapshot, writeSnapshot, DashboardSnapshot } from '../../data/snapshotCache';
+import { readSnapshot, writeSnapshot, SnapshotInput } from '../../data/snapshotCache';
 import type { ClaudeUsageData } from '../../data/dataManager';
 
 const snapshotPath = path.join(os.homedir(), '.claude', 'vscode-claude-status-snapshot.json');
@@ -39,7 +39,7 @@ suite('snapshotCache', () => {
   const maybe = claudeDirExists ? test : test.skip;
 
   maybe('round-trips a snapshot, reviving Date fields', async () => {
-    const snap: DashboardSnapshot = {
+    const snap: SnapshotInput = {
       usage: makeUsage(),
       projectCosts: [{
         projectName: 'demo', projectPath: '/tmp/demo', costToday: 1, cost7d: 2, cost30d: 3,

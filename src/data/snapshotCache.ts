@@ -13,7 +13,12 @@ export interface DashboardSnapshot {
   usage: ClaudeUsageData
   projectCosts: ProjectCostData[]
   heatmap: HeatmapData | null
+  /** Set by readSnapshot: when the file was written — consumers rebase the relative reset times by this. */
+  savedAt: Date
 }
+
+/** What writeSnapshot takes: the snapshot body — `savedAt` is stamped by the writer itself. */
+export type SnapshotInput = Omit<DashboardSnapshot, 'savedAt'>;
 
 interface SnapshotFile {
   version: number
@@ -29,7 +34,7 @@ function getSnapshotPath(): string {
   return path.join(os.homedir(), '.claude', 'vscode-claude-status-snapshot.json');
 }
 
-export async function writeSnapshot(snapshot: DashboardSnapshot): Promise<void> {
+export async function writeSnapshot(snapshot: SnapshotInput): Promise<void> {
   // peak and context are volatile: the first goes stale within minutes, the second
   // recomputes from the parse cache instantly — neither belongs in the snapshot. Stripped
   // here, at the format owner, so no caller can persist them by accident.
@@ -49,10 +54,14 @@ export async function writeSnapshot(snapshot: DashboardSnapshot): Promise<void> 
   }
 }
 
-/** Load the persisted snapshot, reviving Date fields. Missing/invalid → null. */
-export async function readSnapshot(): Promise<DashboardSnapshot | null> {
+/**
+ * Load the persisted snapshot, reviving Date fields. Missing/invalid → null. The path
+ * defaults to the production location; tests pass their own (a temp dir) so they never
+ * touch the user's real snapshot.
+ */
+export async function readSnapshot(filePath: string = getSnapshotPath()): Promise<DashboardSnapshot | null> {
   try {
-    const raw = await fs.readFile(getSnapshotPath(), 'utf-8');
+    const raw = await fs.readFile(filePath, 'utf-8');
     const file = JSON.parse(raw) as SnapshotFile;
     if (!file || file.version !== SNAPSHOT_VERSION || !file.usage || typeof file.usage !== 'object') {
       return null;
@@ -86,8 +95,11 @@ export async function readSnapshot(): Promise<DashboardSnapshot | null> {
     const heatmap = file.heatmap
       ? { ...file.heatmap, generatedAt: reviveDate(file.heatmap.generatedAt) ?? new Date(0) }
       : null;
+    // A broken savedAt reads as epoch 0 — maximally stale, the conservative choice for
+    // consumers that rebase relative reset times by the snapshot's age.
+    const savedAt = reviveDate(file.savedAt) ?? new Date(0);
 
-    return { usage, projectCosts, heatmap };
+    return { usage, projectCosts, heatmap, savedAt };
   } catch {
     return null;   // missing or corrupt — treat as no snapshot
   }

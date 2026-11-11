@@ -51,9 +51,13 @@ All inline `<script>` tags must include `nonce="${nonce}"`.
 │  Claude Code Usage    [↻ Refresh] [$ / %] [⚙]       │
 │                                                      │
 │  ┌─────────────────────────────────────────────────┐ │
-│  │  CURRENT USAGE                                  │ │
-│  │  5h: [████████░░] 78%   resets in 2h 47m       │ │
-│  │  7d: [███████░░░] 84%⚠  resets in 4d 8h        │ │
+│  │  NOW                                             │ │
+│  │  5h: [████████░░] 78%  — resets in 2h 47m      │ │
+│  │       (at 14:23)                                 │ │
+│  │  7d: [███████░░░] 84%⚠ — resets in 4d 8h       │ │
+│  │  ⚡ Peak until 13:00            ← z-ai, in peak │ │
+│  │  Burn rate      412 cr/hr · $1.42/hr  ← z-ai   │ │
+│  │  local §2.8k · quota §3.1k over 5h   ← z-ai    │ │
 │  └─────────────────────────────────────────────────┘ │
 │                                                      │
 │  ┌────────────────┐  ┌──────────────────────────────┐│
@@ -79,6 +83,7 @@ All inline `<script>` tags must include `nonce="${nonce}"`.
 │  │   78% ┤━━━━━━━━━━                               │ │
 │  │      23:00   23:22  00:17                       │ │
 │  │  Burn rate: $4.2/hr                             │ │
+│  │  5h credits left   §11.3k        ← z-ai quota  │ │
 │  │  ⚠ 5h limit in ~45m (at 23:22)                 │ │
 │  │  Daily budget: $12.50 / $20.00 (62%)            │ │
 │  │  Weekly budget: $48.10 / $100 (48%)             │ │
@@ -169,11 +174,21 @@ button:disabled { opacity: 0.5; cursor: default; }
 panel.webview.postMessage({
   type: 'update',
   data: {
-    usage: ClaudeUsageData,
+    usage: ClaudeUsageData,            // + showRateData: boolean, decided by the host
+                                       //   (dashboardUsage in src/data/pollOutcome.ts)
     projectCosts: ProjectCostData[],   // array (multi-root aware)
-    prediction: PredictionData | null,
+    prediction: PredictionData | null, // extended: burnRateCreditsPerHour,
+                                       //   creditsRemaining5h, exhaustsBeforeReset
     heatmap: HeatmapData | null,
     pricing: TokenPricing,             // current claudeStatus.pricing.* values
+    peak: PeakStatus | null,           // z-ai only; volatile, recomputed per refresh,
+                                       //   never persisted to the snapshot
+    context: ContextFill | null,       // workspace's active session fill; volatile too
+    units: { primary: 'credits' | 'usd' },  // resolved claudeStatus.display.primaryUnit
+    reconcile: { localCredits: number, quotaUsed: number } | null,
+                                       // § over the quota window [reset5hAt − 5h, now]
+                                       //   vs the quota's credits5h.used — null unless the
+                                       //   quota amounts are on screen (showRateData)
     settings: {
       provider: string,                // detected/configured provider type
       apiEnabled: boolean,             // claudeStatus.rateLimitApi.enabled
@@ -189,6 +204,31 @@ panel.webview.postMessage({
   mode: 'cost' | 'percent'
 })
 ```
+
+The payload is assembled by one pure function, `buildUpdatePayload` in
+`src/webview/panel.ts`, so the wire structure is covered by `panel.test.ts` without a
+live WebView.
+
+### Now panel (was CURRENT USAGE)
+
+The first card renders the quota windows plus, when their data is present:
+
+| Row | Shown when | Content |
+|-----|------------|---------|
+| Window labels | rate data on screen | `78% — resets in 2h 47m (at 14:23)` — the relative duration plus the absolute clock of the reset (from `resetIn5h`, i.e. `reset5hAt`) |
+| `⚡ Peak until 13:00` | `peak && peak.active` (z-ai inside the window) | the local end of the peak window; claude-ai gets no `peak` object at all |
+| `Burn rate` | a positive speed | `412 cr/hr · $1.42/hr` for z-ai — primary unit first, the second one alongside; claude-ai shows dollars only |
+| `local §2.8k · quota §3.1k over 5h` | `reconcile` present | local § counted over the quota window (`reset5hAt − 5h` → now, **not** the rolling five hours) against `credits5h.used` — a systematic gap means the local credit multipliers drift from the tariff |
+
+### Immediate re-render on a unit change
+
+A `claudeStatus.display.primaryUnit` change re-renders an open panel at once:
+`makeConfigChangeHandler` (`src/webview/panel.ts`) subscribes the panel to
+`onDidChangeConfiguration` and pushes a fresh `update` built through
+`rebuildUnitsPayload` from the last gathered payload input with the *current* setting —
+`units` is resolved from the live `config.primaryUnitSetting` getter on every build, so
+the message carries the new unit. No data cycle, no provider request, no JSONL walk. The
+status bar re-renders through its own handler in `extension.ts`.
 
 ### WebView → Extension
 

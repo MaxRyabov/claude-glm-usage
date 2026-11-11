@@ -46,6 +46,7 @@ import {
   showsRateData,
   actsOnRateData,
   snapshotDataSource,
+  rebaseSnapshotResets,
 } from './pollOutcome';
 import { config } from '../config';
 
@@ -540,7 +541,15 @@ export class DataManager {
     if (snapshot) {
       // Last-known data pending a background refresh. Only live rate data becomes 'stale': a
       // snapshot of a state without it would otherwise show its zero utilization as old data.
-      this.lastData = { ...snapshot.usage, dataSource: snapshotDataSource(snapshot.usage) };
+      // The snapshot's reset times are relative to its save moment — rebase them onto now
+      // (window labels, the forecast cap and the reconciliation window all assume now).
+      const rebased = rebaseSnapshotResets(snapshot.usage, snapshot.savedAt.getTime(), Date.now());
+      this.lastData = {
+        ...snapshot.usage,
+        resetIn5h: rebased.resetIn5h,
+        resetIn7d: rebased.resetIn7d,
+        dataSource: snapshotDataSource(snapshot.usage),
+      };
       // The snapshot file is shared by every VSCode window, so its project costs may
       // belong to a different workspace. Only render entries matching this window's
       // folders; the background refresh fills in the rest.

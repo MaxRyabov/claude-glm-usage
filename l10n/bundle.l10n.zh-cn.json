@@ -35,7 +35,6 @@
   "{0} ago": "{0}前",
   "↻ Refresh": "↻ 刷新",
   "$ / %": "$ / %",
-  "Current Usage": "当前用量",
   "5h window": "5小时窗口",
   "7d window": "7天窗口",
   "Token Cost": "令牌费用",
@@ -122,5 +121,10 @@
   "Custom endpoint": "自定义端点",
   "Peak until {0}": "高峰期至 {0}",
   "Peak {0}–{1} ({2})": "高峰期 {0}–{1} ({2})",
-  "Context: {0}": "上下文: {0}"
+  "Context: {0}": "上下文: {0}",
+  "Now": "当前",
+  "{0} cr/hr": "{0} 积分/时",
+  "local {0} · quota {1} over 5h": "本地 {0} · 配额 {1}（5小时）",
+  "5h credits left": "剩余积分（5小时）",
+  "The 5h window will not be exhausted before the reset.": "5小时窗口在重置前不会被耗尽。"
 }
