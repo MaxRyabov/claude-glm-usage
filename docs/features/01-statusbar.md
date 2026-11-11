@@ -114,6 +114,7 @@ the ⚡ badge and the context segment as usual.
 | `z-ai`, API enabled | Yes (quota) | percent (default) or cost | only in peak window | credits (auto) |
 | `z-ai`, API disabled, cache exists | Yes (stale, quota) | percent with `[X ago]` (m / h / d) | only in peak window | credits (auto) |
 | `z-ai`, API disabled / no quota cache (local cost data present) | No | cost only (local-only) | only in peak window | credits (auto) |
+| `z-ai`, no quota cache, no local cost data | No | no-data (label replaced) | never | credits (auto) |
 | `aws-bedrock` / `api-key` / `unknown` | No | cost only (always) | never | usd |
 
 ---
