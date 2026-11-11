@@ -29,7 +29,7 @@ same windows with credits — `my-app:§2.8k` — see the z-ai example below.)
 
 ### Denied (limit reached)
 ```
-🤖 5h:100%✗ 7d:84% · my-app:$3.21
+🤖 5h:100%✗ 7d:84%⚠ · my-app:$3.21
 ```
 
 ### z-ai in peak hours (UTC weekdays 06:00–10:00)
