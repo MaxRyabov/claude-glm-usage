@@ -119,5 +119,8 @@
   "(login token expired)": "（ログイントークンの期限切れ）",
   "Z.AI Usage": "Z.AI 使用状況",
   "Z.AI / GLM": "Z.AI / GLM",
-  "Custom endpoint": "カスタムエンドポイント"
+  "Custom endpoint": "カスタムエンドポイント",
+  "Peak until {0}": "ピークは {0} まで",
+  "Peak {0}–{1} ({2})": "ピーク {0}–{1} ({2})",
+  "Context: {0}": "コンテキスト: {0}"
 }
