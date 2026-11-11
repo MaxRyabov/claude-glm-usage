@@ -28,7 +28,8 @@ interface DashboardMessage {
   heatmap: HeatmapData | null;
   pricing: TokenPricing;
   settings: DashboardSettings;
-  // Optional fields of the add-statusbar-peak-ctx-units extension: peak/context are the
+  // Stage-4 fields of the add-statusbar-peak-ctx-units extension. All four are always
+  // present on the wire; the data they carry is null when absent: peak/context are the
   // volatile per-refresh values of the same name (never persisted to the snapshot),
   // units drives every cost rendering of the page, reconcile carries the quota-window
   // credit comparison. prediction is extended in place (burnRateCreditsPerHour,
@@ -96,16 +97,25 @@ export interface UpdatePayloadInput {
 }
 
 /**
+ * Whether the quota's own used § is on screen — the single gate of the reconciliation, used
+ * both to decide the host-side window read and to pair the numbers in the payload, so the
+ * read and the pairing can never disagree. Follows showRateData (the on-screen amounts
+ * gate), not the stricter act-on gate of the forecast.
+ */
+export function quotaAmountsOnScreen(
+  usage: Pick<ClaudeUsageData, 'providerType' | 'dataSource' | 'credits5h'>,
+): boolean {
+  return usage.credits5h !== undefined && showsRateData(usage.providerType, usage.dataSource);
+}
+
+/**
  * The `update` message payload as one pure function, so the wire structure
  * (docs/features/02-webview.md, Message Protocol) is testable without a live WebView.
  */
 export function buildUpdatePayload(input: UpdatePayloadInput): { type: 'update'; data: DashboardMessage } {
   const usage = dashboardUsage(input.usage);
-  // The reconciliation compares the local count against the quota's own used § — both are
-  // shown next to each other, so it follows the same gate as the on-screen credit amounts
-  // (showRateData), not the stricter act-on gate of the forecast.
   const quota = usage.credits5h;
-  const reconcile = usage.showRateData && quota && input.quotaWindowCredits !== null
+  const reconcile = quotaAmountsOnScreen(input.usage) && quota && input.quotaWindowCredits !== null
     ? { localCredits: input.quotaWindowCredits, quotaUsed: quota.used }
     : null;
   return {
@@ -128,6 +138,19 @@ export function buildUpdatePayload(input: UpdatePayloadInput): { type: 'update';
       reconcile,
     },
   };
+}
+
+/**
+ * Presentation-only rebuild of the last payload under the current unit setting: the same
+ * gathered input with a fresh `primaryUnitSetting`. A `claudeStatus.display.primaryUnit`
+ * flip re-renders through this — no data cycle, no provider request, no JSONL walk. Null
+ * when nothing has been gathered yet (nothing to redraw).
+ */
+export function rebuildUnitsPayload(
+  last: UpdatePayloadInput | null,
+  primaryUnitSetting: PrimaryUnitSetting,
+): { type: 'update'; data: DashboardMessage } | null {
+  return last ? buildUpdatePayload({ ...last, primaryUnitSetting }) : null;
 }
 
 /**
@@ -755,6 +778,15 @@ export function getWebviewContent(
         .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    // The "— resets in … (at HH:MM)" suffix of a window label, hidden when the duration is
+    // absent (0): a data-less state must never read "resets in 0m (at <now>)". One helper
+    // for both modes and both windows — the guard must not live in one branch only.
+    function resetSuffix(seconds) {
+      return seconds > 0
+        ? ' — ' + i18n.resetsIn + ' ' + fmt(seconds) + ' (' + i18n.atTime + ' ' + clockIn(seconds) + ')'
+        : '';
+    }
+
     // sync: config.ts formatCredits — plain-JS copy of the compact § formatter (the number
     // part only; the § glyph is added by the caller). Keep the tiers identical to the host
     // formatter, whose behaviour is covered by primaryUnit.test.ts. Change both together.
@@ -771,10 +803,14 @@ export function getWebviewContent(
     // («412 cr/hr · $1.42/hr»); claude-ai and every non-z-ai provider show dollars only.
     // Both values come from the one prediction engine, so they never diverge.
     function speedText(prediction, units, providerType) {
-      const usd = '$' + prediction.currentBurnRate.toFixed(2) + i18n.perHour;
+      // Dollars only when the USD rate is real: a credits-only stream must not print
+      // "$0.00/hr · 412 cr/hr" — that reads as broken data, not as a zero dollar rate.
+      const usd = prediction.currentBurnRate > 0
+        ? '$' + prediction.currentBurnRate.toFixed(2) + i18n.perHour : '';
       const both = providerType === 'z-ai' && prediction.burnRateCreditsPerHour > 0;
       if (!both) { return usd; }
       const cr = i18n.creditsPerHour.replace('__N__', fmtCreditsNum(prediction.burnRateCreditsPerHour));
+      if (!usd) { return cr; }
       return units && units.primary === 'credits' ? cr + ' · ' + usd : usd + ' · ' + cr;
     }
 
@@ -789,15 +825,11 @@ export function getWebviewContent(
       if (row7d) { row7d.style.display = show7d ? '' : 'none'; }
 
       if (useCostMode) {
-        const resetSuffix5h = hasRateData && usage.resetIn5h > 0
-          ? ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h)
-            + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn5h) + ')' : '';
         document.getElementById('usage-5h-label').textContent =
-          '$' + usage.cost5h.toFixed(2) + resetSuffix5h;
+          '$' + usage.cost5h.toFixed(2) + resetSuffix(usage.resetIn5h);
         if (show7d) {
           document.getElementById('usage-7d-label').textContent =
-            '$' + usage.cost7d.toFixed(2) + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d)
-            + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn7d) + ')';
+            '$' + usage.cost7d.toFixed(2) + resetSuffix(usage.resetIn7d);
         }
       } else {
         // percent mode — claude-ai and z-ai. The denial mark belongs on the window that is
@@ -809,13 +841,11 @@ export function getWebviewContent(
           denied && usage.utilization5h < 1 && !(show7d && usage.utilization7d >= 1);
         document.getElementById('usage-5h-label').textContent =
           pct(usage.utilization5h) + mark(usage.utilization5h, deniedWithoutFullWindow) +
-          ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h)
-          + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn5h) + ')';
+          resetSuffix(usage.resetIn5h);
         if (show7d) {
           document.getElementById('usage-7d-label').textContent =
             pct(usage.utilization7d) + mark(usage.utilization7d, false) +
-            ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d)
-            + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn7d) + ')';
+            resetSuffix(usage.resetIn7d);
         }
       }
 
@@ -967,7 +997,7 @@ export function getWebviewContent(
       // Credit path: the remaining § of the live 5h quota the forecast ran against. Present
       // only when the quota reported absolute amounts fresh enough to act on (the host
       // gates creditsRemaining5h on actsOnRateData) — a stale remainder predicts nothing.
-      if (prediction.creditsRemaining5h !== null && typeof prediction.creditsRemaining5h === 'number') {
+      if (typeof prediction.creditsRemaining5h === 'number') {
         html += '<div class="cost-row"><span class="cost-label">' + i18n.creditsLeft5h + '</span>' +
           '<span>§' + fmtCreditsNum(prediction.creditsRemaining5h) + '</span></div>';
       }
@@ -1542,6 +1572,8 @@ export class DashboardPanel {
 
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
+  /** The last input sendUpdate gathered — lets a unit flip rebuild the payload without I/O. */
+  private lastPayloadInput: UpdatePayloadInput | null = null;
 
   private constructor(
     private readonly dataManager: DataManager,
@@ -1579,13 +1611,17 @@ export class DashboardPanel {
       dataManager.onDidUpdate(data => { this.sendUpdate(data).catch(() => {}); })
     );
 
-    // A primaryUnit change re-renders at once from the last data, without waiting for the
-    // next data cycle — the setting changes presentation only.
+    // A primaryUnit change re-renders at once from the last gathered payload input, without
+    // waiting for the next data cycle and without re-reading anything — the setting changes
+    // presentation only.
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration(
         makeConfigChangeHandler(
-          () => this.dataManager.getLastData(),
-          data => { this.sendUpdate(data).catch(() => {}); },
+          () => this.lastPayloadInput?.usage,
+          () => {
+            const message = rebuildUnitsPayload(this.lastPayloadInput, config.primaryUnitSetting);
+            if (message) { this.panel.webview.postMessage(message); }
+          },
         ),
       ),
     );
@@ -1651,17 +1687,20 @@ export class DashboardPanel {
   }
 
   private async sendUpdate(usage: ClaudeUsageData): Promise<void> {
-    const prediction = await this.dataManager.getPrediction();
     const heatmap = this.dataManager.getLastHeatmapData();
     // Local § over the quota window — counted only when the quota's own used § is on
-    // screen, so the reconciliation row never appears against absent quota data. A read
-    // failure just hides the row (fail-soft), never the rest of the update.
-    const quotaOnScreen = usage.credits5h !== undefined
-      && showsRateData(usage.providerType, usage.dataSource);
-    const quotaWindowCredits = quotaOnScreen
-      ? await readQuotaWindowCredits(quotaWindowStartMs(usage.resetIn5h, Date.now())).catch(() => null)
-      : null;
-    const message = buildUpdatePayload({
+    // screen (quotaAmountsOnScreen, the single gate of the reconciliation), so the row
+    // never appears against absent quota data. A read failure just hides the row
+    // (fail-soft), never the rest of the update; it runs in parallel with the forecast,
+    // which walks the same entry caches.
+    const quotaOnScreen = quotaAmountsOnScreen(usage);
+    const [prediction, quotaWindowCredits] = await Promise.all([
+      this.dataManager.getPrediction(),
+      quotaOnScreen
+        ? readQuotaWindowCredits(quotaWindowStartMs(usage.resetIn5h, Date.now())).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    const input: UpdatePayloadInput = {
       usage,
       prediction,
       heatmap,
@@ -1672,8 +1711,10 @@ export class DashboardPanel {
       weeklyBudget: config.weeklyBudget,
       primaryUnitSetting: config.primaryUnitSetting,
       quotaWindowCredits,
-    });
-    this.panel.webview.postMessage(message);
+    };
+    // Kept so a presentation-only setting flip can rebuild this exact input without I/O.
+    this.lastPayloadInput = input;
+    this.panel.webview.postMessage(buildUpdatePayload(input));
   }
 
   private dispose(): void {

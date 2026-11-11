@@ -6,10 +6,12 @@ import * as path from 'path';
 import {
   getWebviewContent,
   buildUpdatePayload,
+  rebuildUnitsPayload,
   quotaWindowStartMs,
   sumCreditsSince,
   makeConfigChangeHandler,
 } from '../../webview/panel';
+import { formatCredits } from '../../config';
 import { readSnapshot } from '../../data/snapshotCache';
 import type { ClaudeUsageData } from '../../data/dataManager';
 import type { PredictionData } from '../../data/prediction';
@@ -257,7 +259,7 @@ suite('quota reconciliation window', () => {
     assert.ok(Math.abs(sumCreditsSince(entries, peakTs) - 1.65) < 1e-9);
     // Window starting exactly at the off-peak turn: the boundary entry counts.
     assert.ok(Math.abs(sumCreditsSince(entries, offpeakTs) - 0.55) < 1e-9);
-    // One millisecond earlier excludes it; the peak turn (4h+ before) is outside either way.
+    // One millisecond later excludes it; the peak turn (4h+ before) is outside either way.
     assert.ok(Math.abs(sumCreditsSince(entries, offpeakTs + 1) - 0) < 1e-9);
   });
 });
@@ -284,12 +286,19 @@ suite('primaryUnit change redraws the open dashboard', () => {
     assert.strictEqual(pushed.length, 0, 'nothing to redraw before the first data arrives');
   });
 
-  test('the payload itself flips with the setting — the redraw shows the other unit', () => {
-    const usage = makeUsage();
-    const before = buildUpdatePayload(payloadInput(usage, 'auto')).data.units.primary;
-    const after = buildUpdatePayload(payloadInput(usage, 'usd')).data.units.primary;
-    assert.strictEqual(before, 'credits');
-    assert.strictEqual(after, 'usd');
+  test('rebuildUnitsPayload flips the unit without regathering — and redraws nothing before the first update', () => {
+    // The handler's redraw path: the last gathered input is rebuilt under the current
+    // setting, so the flipped unit reaches the page with no data cycle and no disk read.
+    const last = payloadInput(makeUsage(), 'auto');
+    assert.strictEqual(rebuildUnitsPayload(last, 'usd')!.data.units.primary, 'usd');
+    assert.strictEqual(rebuildUnitsPayload(last, 'credits')!.data.units.primary, 'credits');
+    // The gathered part is reused as-is, not recomputed: the reconcile pairing survives.
+    assert.deepStrictEqual(
+      rebuildUnitsPayload(last, 'usd')!.data.reconcile,
+      buildUpdatePayload(last).data.reconcile,
+      'a presentation-only flip must not alter the gathered data',
+    );
+    assert.strictEqual(rebuildUnitsPayload(null, 'usd'), null, 'nothing to redraw before the first update');
   });
 });
 
@@ -313,6 +322,11 @@ suite('Now panel page logic', () => {
       html.includes("units.primary === 'credits' ? cr + ' · ' + usd : usd + ' · ' + cr"),
       'credits lead when primary, dollars otherwise',
     );
+    // A credits-only stream shows credits alone — "$0.00/hr · 412 cr/hr" reads as broken data.
+    assert.ok(
+      html.includes('const usd = prediction.currentBurnRate > 0'),
+      'the dollar part renders only for a real dollar rate',
+    );
   });
 
   test('the reconciliation row uses the quota-window template', () => {
@@ -321,8 +335,12 @@ suite('Now panel page logic', () => {
   });
 
   test('reset labels carry the absolute clock next to the relative duration', () => {
-    assert.ok(html.includes('clockIn(usage.resetIn5h)'), 'the 5h label names the reset clock time');
-    assert.ok(html.includes('clockIn(usage.resetIn7d)'), 'the 7d label names the reset clock time');
+    assert.ok(html.includes('resetSuffix(usage.resetIn5h)'), 'the 5h label names the reset clock time');
+    assert.ok(html.includes('resetSuffix(usage.resetIn7d)'), 'the 7d label names the reset clock time');
+    assert.ok(
+      html.includes('function resetSuffix(seconds) {\n      return seconds > 0'),
+      'one suffix helper gates both modes and both windows: an absent reset (0) must not read "resets in 0m (at <now>)"',
+    );
   });
 
   test('the survives-reset recommendation is localized, not the English fallback', () => {
@@ -334,43 +352,57 @@ suite('Now panel page logic', () => {
 
   test('the credit path row shows the remaining 5h quota credits', () => {
     assert.ok(html.includes('i18n.creditsLeft5h'), 'Prediction card carries the credit path');
+    assert.ok(
+      !html.includes('creditsRemaining5h !== null'),
+      'presence is the typeof check alone — a null-union field never passes typeof anyway',
+    );
+  });
+});
+
+suite('the page § formatter stays in lockstep with the host', () => {
+  test('fmtCreditsNum (plain-JS copy in the page) matches config.formatCredits tier for tier', () => {
+    // The webview cannot import config.ts, so the page embeds a plain-JS copy of the
+    // number formatter. This pins the copy against the host formatter on the actual
+    // template, so a tier change in one place fails the suite instead of silently
+    // making the dashboard print numbers the status bar never would.
+    const m = html.match(/function fmtCreditsNum\(n\) \{[\s\S]*?\n    \}/);
+    assert.ok(m, 'the page template must define fmtCreditsNum');
+    const fmtCreditsNum = new Function(`return (${m[0]})`)() as (n: number) => string;
+    const values = [
+      0, 1, 42, 999, 1000, 1001, 9999, 99_949, 99_950, 123_456, 999_949, 999_950,
+      1_000_000, 1_234_567_890, 9.9e11, 5e12, Number.MAX_SAFE_INTEGER, -3, NaN, Infinity,
+    ];
+    for (const v of values) {
+      assert.strictEqual(fmtCreditsNum(v), formatCredits(v).slice(1), `parity at ${v}`);
+    }
   });
 });
 
 suite('snapshot validator accepts the stage-4 optional fields', () => {
-  // The snapshot file lives at the production path; back it up so tests never clobber it.
-  const snapshotPath = path.join(os.homedir(), '.claude', 'vscode-claude-status-snapshot.json');
-  const claudeDirExists = fs.existsSync(path.dirname(snapshotPath));
-  let backup: string | null = null;
-
-  suiteSetup(() => {
-    if (!claudeDirExists) { return; }
-    try { backup = fs.readFileSync(snapshotPath, 'utf-8'); } catch { backup = null; }
-  });
-  suiteTeardown(() => {
-    if (!claudeDirExists) { return; }
-    try {
-      if (backup !== null) { fs.writeFileSync(snapshotPath, backup, { mode: 0o600 }); }
-      else { fs.rmSync(snapshotPath, { force: true }); }
-    } catch { /* ignore */ }
-  });
-
-  const maybe = claudeDirExists ? test : test.skip;
-
-  maybe('a v1 snapshot whose usage still carries peak/context loads unchanged', async () => {
+  // The validator runs against a snapshot file in an isolated temp dir — never the
+  // production path under ~/.claude, which the user's running extension owns.
+  test('a v1 snapshot whose usage still carries peak/context loads unchanged', async () => {
     // writeSnapshot strips the volatile fields, but the validator must not fail closed on
     // them either: v1 accepts new optional fields without a schema-version bump (D7).
-    const usage = makeUsage({ providerType: 'z-ai', dataSource: 'api' });
-    const file = {
-      version: 1,
-      savedAt: new Date().toISOString(),
-      usage,
-      projectCosts: [],
-      heatmap: null,
-    };
-    await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
-    const back = await readSnapshot();
-    assert.ok(back, 'the v1 validator must accept peak/context on the usage object');
-    assert.strictEqual(back.usage.providerType, 'z-ai');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbcs-snapshot-'));
+    const snapshotPath = path.join(dir, 'vscode-claude-status-snapshot.json');
+    try {
+      const usage = makeUsage({ providerType: 'z-ai', dataSource: 'api', cost5h: 42.42 });
+      const file = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        usage,
+        projectCosts: [],
+        heatmap: null,
+      };
+      // Same mode as the production writer (atomicWriteJson uses 0o600).
+      await fsp.writeFile(snapshotPath, JSON.stringify(file), { encoding: 'utf-8', mode: 0o600 });
+      const back = await readSnapshot(snapshotPath);
+      assert.ok(back, 'the v1 validator must accept peak/context on the usage object');
+      assert.strictEqual(back.usage.providerType, 'z-ai');
+      assert.strictEqual(back.usage.cost5h, 42.42, 'the temp file is the one being read');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
