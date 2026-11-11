@@ -12,21 +12,20 @@ Also supports a user-defined USD budget with its own alert threshold.
 
 ### Burn Rate Calculation
 
-Use a sliding window of the **last 30 minutes** of JSONL entries:
+Use a sliding window of the **last 30 minutes** of JSONL entries — one engine, two units.
+The same window yields USD/hour and z.ai credits/hour, so the two numbers a dashboard
+shows next to each other can never diverge:
 
 ```typescript
-export function calculateBurnRate(
-  entries: ReadonlyArray<{ timestamp: number; cost: number }>
-): number {
-  if (entries.length < 2) return 0  // not enough data
-
-  const totalCost = entries.reduce((sum, e) => sum + e.cost, 0)
-  const spanMs = Date.now() - entries[0].timestamp
-  const spanHours = spanMs / (1000 * 3600)
-
-  return spanHours > 0 ? totalCost / spanHours : 0  // USD/hour
-}
+export function calculateBurnRate(entries: ReadonlyArray<{ timestamp: number; cost: number }>): number
+export function calculateCreditsBurnRate(entries: ReadonlyArray<{ timestamp: number; credits: number }>): number
+// Both: fewer than 2 turns → 0; otherwise sum ÷ (now − first turn), per hour.
 ```
+
+Turns are read from the main session files **and** `<session>/subagents/*.jsonl` — without
+the subagent turns the credit speed is systematically understated. Credits follow
+`creditsForEntry` (GLM-only models, peak factor 0.5 outside UTC weekdays 06:00–10:00 by the
+turn's own timestamp).
 
 > **Note:** Costs are always calculated from token counts (`entry.message.usage`).
 > There is no `costUSD` field in JSONL.
@@ -34,26 +33,45 @@ export function calculateBurnRate(
 ### Rate Limit Exhaustion Prediction
 
 ```typescript
-export async function computePrediction(
-  utilization5h: number,    // 0.0–1.0
-  resetIn5h: number,        // seconds until reset
-  cost5h: number,           // USD spent in current 5h window
-  costToday: number,        // USD spent today (for budget)
-  dailyBudget: number | null,
-): Promise<PredictionData>
+export async function computePrediction(input: PredictionInput): Promise<PredictionData>
+
+export interface PredictionInput {
+  utilization5h: number        // 0.0–1.0
+  resetIn5h: number            // seconds until reset; caps the exhaustion horizon
+  spend5h: number              // window spend in the utilization unit: USD cost5h for
+                               //   claude-ai, locally counted credits5h for z-ai
+  costToday: number            // USD, for the budget path
+  dailyBudget: number | null
+  fallbackUnit?: 'usd' | 'credits'  // unit of spend5h and of the fallback burn rate
+  quotaCredits?: QuotaAmounts | null  // live z.ai quota with absolute amounts — pass it
+                               //   only when actsOnRateData admits the data: a stale
+                               //   remainder must not drive a forecast
+  pricingCtx?: PricingContext  // per-model pricing for the USD burn rate
+}
 ```
 
-**Algorithm:**
+**Algorithm** (`predictFromTurns` in `src/data/prediction.ts`):
 
-1. Read all JSONL entries from the last 30 minutes
-2. Calculate burn rate (USD/hour) from those entries
-3. If `utilization5h >= 1.0`: already exhausted → `estimatedExhaustionIn = 0`
-4. If `burnRate > 0` and `utilization5h > 0`:
-   - Estimate total capacity: `estimatedCapacityUsd = cost5h / utilization5h`
-   - Remaining USD: `remainingUsd = estimatedCapacityUsd * (1.0 - utilization5h)`
-   - Hours until exhaustion: `remainingUsd / burnRate`
-   - Cap at `resetIn5h` (exhaustion can't happen after the window resets)
-5. `safeToStartHeavyTask = effectiveSeconds > 1800` (30 min threshold)
+1. Read the turns of the last 30 minutes; compute `burnRateUsdPerHour` and
+   `burnRateCreditsPerHour` from them.
+2. If `utilization5h >= 1.0`: already exhausted → `estimatedExhaustionIn = 0`.
+3. **Quota-checked path** — live z.ai quota with absolute amounts (`quotaCredits`):
+   - remaining = `quotaCredits.remaining ?? (quotaCredits.total − quotaCredits.used)`
+     — `remaining` is used exactly as reported, never recomputed;
+   - remaining ≤ 0 → the limit is reached now (`rate-limit-reached`);
+   - credits burn rate 0 (no turns in the window) → **no exhaustion forecast at all**;
+   - `remaining / burn ≥ resetIn5h` → `exhaustsBeforeReset = false` and the
+     `survives-reset` recommendation: "The 5h window will not be exhausted before the
+     reset.";
+   - otherwise the exhaustion time is capped at `resetIn5h` (exhaustion can't happen
+     after the window resets), `creditsRemaining5h` carries the remaining §.
+4. **Utilization fallback** — no absolute amounts: estimate capacity from
+   `spend5h / utilization5h`, remaining share `× (1.0 − utilization5h)`, divide by the
+   burn rate **in spend5h's own unit** (`fallbackUnit`), cap at `resetIn5h`.
+5. `safeToStartHeavyTask = effectiveSeconds > 1800` (30 min threshold).
+
+One rate per window means the forecast errs up to 2× either way at the peak-window
+boundaries — leaving the peak it is pessimistic, entering it optimistic.
 
 ### Recommendation Text
 
@@ -179,11 +197,20 @@ In the Prediction card of the dashboard:
 <div class="card">
   <p class="card-title">Prediction</p>
 
-  <div class="prediction-row">Burn rate: $4.2 / hr</div>
+  <!-- Burn rate — the same two-unit speed the Now panel shows:
+       "412 cr/hr · $1.42/hr" for z-ai (primary unit first), "$4.2/hr" otherwise -->
+  <div class="cost-row"><span class="cost-label">Burn rate</span>
+    <span>412 cr/hr · $1.42/hr</span></div>
 
-  <!-- Rate limit prediction -->
+  <!-- Credit path — only when the live quota reported absolute amounts
+       (creditsRemaining5h is host-gated on actsOnRateData) -->
+  <div class="cost-row"><span class="cost-label">5h credits left</span>
+    <span>§11.3k</span></div>
+
+  <!-- Rate limit prediction; the quota-checked path that survives says exactly that
+       (recommendationKey "survives-reset") instead of a time -->
   <div class="alert warning">
-    ⚠ At this rate, 5h limit reached in ~45 min (at 14:23)
+    ⚠️ 5h limit in ~45 min (at 14:23)
   </div>
 
   <!-- Budget (if configured) -->
@@ -206,3 +233,9 @@ In the Prediction card of the dashboard:
   </div>
 </div>
 ```
+
+The burn-speed line itself is built by one page helper, `speedText` in
+`src/webview/panel.ts`: dollars always, credits alongside for z-ai, ordered by
+`units.primary`. The Now panel shows the same line, plus the quota reconciliation
+"local §2.8k · quota §3.1k over 5h" (see
+[02-webview.md](02-webview.md), "Now panel").

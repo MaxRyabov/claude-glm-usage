@@ -1,8 +1,15 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { DataManager, ClaudeUsageData, ProjectCostData, PredictionData, HeatmapData } from '../data/dataManager';
-import { config } from '../config';
-import { dashboardUsage } from '../data/pollOutcome';
+import { config, resolvePrimaryUnit } from '../config';
+import type { PrimaryUnit, PrimaryUnitSetting } from '../config';
+import { dashboardUsage, showsRateData } from '../data/pollOutcome';
+import { discoverFiles, loadEntries } from '../data/entryCache';
+import type { UsageEntry } from '../data/entryCache';
+import { creditsForEntry } from '../data/credits';
+import { isPeakAt } from '../data/peakHours';
+import type { PeakStatus } from '../data/peakHours';
+import type { ContextFill } from '../data/contextFill';
 import type { TokenPricing } from '../data/jsonlReader';
 
 interface DashboardSettings {
@@ -21,6 +28,123 @@ interface DashboardMessage {
   heatmap: HeatmapData | null;
   pricing: TokenPricing;
   settings: DashboardSettings;
+  // Optional fields of the add-statusbar-peak-ctx-units extension: peak/context are the
+  // volatile per-refresh values of the same name (never persisted to the snapshot),
+  // units drives every cost rendering of the page, reconcile carries the quota-window
+  // credit comparison. prediction is extended in place (burnRateCreditsPerHour,
+  // creditsRemaining5h, exhaustsBeforeReset) — see PredictionData.
+  peak: PeakStatus | null;
+  context: ContextFill | null;
+  units: DashboardUnits;
+  reconcile: DashboardReconcile | null;
+}
+
+/** The resolved display unit (config.ts resolvePrimaryUnit) — one answer for the whole page. */
+export interface DashboardUnits {
+  primary: PrimaryUnit
+}
+
+/** Local § over the quota window vs the quota's own used § — the tariff-drift detector. */
+export interface DashboardReconcile {
+  localCredits: number
+  quotaUsed: number
+}
+
+/**
+ * Start of the quota window in ms: `reset5hAt − 5h`, i.e. `now + resetIn5h − 5h`. The
+ * reconciliation line counts local credits over THIS window — aligned with the quota —
+ * not over the rolling five hours, which ends earlier by exactly `resetIn5h`.
+ */
+export function quotaWindowStartMs(resetIn5hSec: number, nowMs: number): number {
+  return nowMs + resetIn5hSec * 1000 - 5 * 3600 * 1000;
+}
+
+/** § summed over the entries at or after `windowStartMs` — the pure core of the reconciliation. */
+export function sumCreditsSince(entries: ReadonlyArray<UsageEntry>, windowStartMs: number): number {
+  let sum = 0;
+  for (const entry of entries) {
+    if (entry.timestamp < windowStartMs) { continue; }
+    sum += creditsForEntry(entry, isPeakAt(entry.timestamp));
+  }
+  return sum;
+}
+
+/**
+ * Local § over the quota-aligned window. Rides the same entryCache walk + parse caches
+ * every other aggregate uses (discoverFiles/loadEntries), so it is an in-memory loop over
+ * cached entries — not a second JSONL parse.
+ */
+async function readQuotaWindowCredits(windowStartMs: number): Promise<number> {
+  const files = await discoverFiles(windowStartMs);
+  const entries = await loadEntries(files);
+  return sumCreditsSince(entries, windowStartMs);
+}
+
+/** Everything `buildUpdatePayload` needs; gathered by sendUpdate, pure here for tests. */
+export interface UpdatePayloadInput {
+  usage: ClaudeUsageData;
+  prediction: PredictionData | null;
+  heatmap: HeatmapData | null;
+  projectCosts: ProjectCostData[];
+  pricing: TokenPricing;
+  apiEnabled: boolean;
+  cacheTtlSeconds: number;
+  weeklyBudget: number | null;
+  primaryUnitSetting: PrimaryUnitSetting;
+  /** Local § over the quota window, or null when there is nothing to reconcile against. */
+  quotaWindowCredits: number | null;
+}
+
+/**
+ * The `update` message payload as one pure function, so the wire structure
+ * (docs/features/02-webview.md, Message Protocol) is testable without a live WebView.
+ */
+export function buildUpdatePayload(input: UpdatePayloadInput): { type: 'update'; data: DashboardMessage } {
+  const usage = dashboardUsage(input.usage);
+  // The reconciliation compares the local count against the quota's own used § — both are
+  // shown next to each other, so it follows the same gate as the on-screen credit amounts
+  // (showRateData), not the stricter act-on gate of the forecast.
+  const quota = usage.credits5h;
+  const reconcile = usage.showRateData && quota && input.quotaWindowCredits !== null
+    ? { localCredits: input.quotaWindowCredits, quotaUsed: quota.used }
+    : null;
+  return {
+    type: 'update',
+    data: {
+      usage,
+      projectCosts: input.projectCosts,
+      prediction: input.prediction,
+      heatmap: input.heatmap,
+      pricing: input.pricing,
+      settings: {
+        provider: usage.providerType,
+        apiEnabled: input.apiEnabled,
+        cacheTtlSeconds: input.cacheTtlSeconds,
+        weeklyBudget: input.weeklyBudget,
+      },
+      peak: usage.peak ?? null,
+      context: usage.context ?? null,
+      units: { primary: resolvePrimaryUnit(usage.providerType, input.primaryUnitSetting) },
+      reconcile,
+    },
+  };
+}
+
+/**
+ * A `claudeStatus.display.primaryUnit` change re-renders the open dashboard at once: the
+ * setting only changes presentation, and waiting for the next data cycle (up to 60 s)
+ * would keep the old unit on screen that whole time. The status bar re-renders through
+ * extension.ts's own onDidChangeConfiguration; the panel pushes its own update here.
+ */
+export function makeConfigChangeHandler(
+  getLastData: () => ClaudeUsageData | undefined,
+  sendUpdate: (data: ClaudeUsageData) => void,
+): (e: { affectsConfiguration(section: string): boolean }) => void {
+  return e => {
+    if (!e.affectsConfiguration('claudeStatus.display.primaryUnit')) { return; }
+    const last = getLastData();
+    if (last) { sendUpdate(last); }
+  };
 }
 
 function generateNonce(): string {
@@ -33,7 +157,11 @@ function buildI18n(): Record<string, string> {
     title:                 t('Claude Code Usage'),
     refresh:               t('↻ Refresh'),
     toggleMode:            t('$ / %'),
-    currentUsage:          t('Current Usage'),
+    now:                   t('Now'),
+    peakUntil:             t('Peak until {0}', '__T__'),
+    creditsPerHour:        t('{0} cr/hr', '__N__'),
+    reconcile5h:           t('local {0} · quota {1} over 5h', '__N__', '__N2__'),
+    creditsLeft5h:         t('5h credits left'),
     window5h:              t('5h window'),
     window7d:              t('7d window'),
     tokenCost:             t('Token Cost'),
@@ -119,6 +247,8 @@ function buildI18n(): Record<string, string> {
     recWarning:         t('Less than 30 min remaining. Wrap up current task.'),
     recCritical:        t('Less than 10 min remaining. Save your work and pause.'),
     recRateLimitReached: t('Rate limit reached. Wait for reset.'),
+    // prediction.ts builds this English text for tests; the page shows the localized key.
+    recSurvivesReset:   t('The 5h window will not be exhausted before the reset.'),
   };
 }
 
@@ -249,6 +379,11 @@ export function getWebviewContent(
     .cost-label { color: var(--vscode-descriptionForeground); }
 
     .prediction-row { padding: 3px 0; font-size: 0.95em; }
+    /* Diagnostic lines of the Now panel (quota reconciliation) — muted like the footer. */
+    .now-note {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+    }
 
     .alert {
       padding: 6px 8px;
@@ -440,10 +575,10 @@ export function getWebviewContent(
     </div>
   </div>
 
-  <!-- Current Usage -->
+  <!-- Now (was CURRENT USAGE): the quota windows plus peak, burn speed and reconciliation -->
   <div class="card">
     <div class="card-title">
-      ${i18n.currentUsage}
+      ${i18n.now}
       <span class="plan-badge" id="plan-badge" style="display:none"></span>
     </div>
     <div class="progress-row">
@@ -466,6 +601,7 @@ export function getWebviewContent(
       </div>
       <div class="amounts" id="usage-7d-amounts" style="display:none"></div>
     </div>
+    <div id="now-extra"></div>
   </div>
 
   <div class="two-col">
@@ -612,6 +748,36 @@ export function getWebviewContent(
       return Math.round(util * 100) + '%';
     }
 
+    // Absolute clock label of a moment a given number of seconds from now — the reset time
+    // shown next to the relative "resets in …", same 2-digit clock format fmtTime uses.
+    function clockIn(secondsFromNow) {
+      return new Date(Date.now() + secondsFromNow * 1000)
+        .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // sync: config.ts formatCredits — plain-JS copy of the compact § formatter (the number
+    // part only; the § glyph is added by the caller). Keep the tiers identical to the host
+    // formatter, whose behaviour is covered by primaryUnit.test.ts. Change both together.
+    function fmtCreditsNum(n) {
+      if (!Number.isFinite(n) || n < 0) { return '0'; }
+      const r = Math.round(n);
+      if (r < 1000) { return String(r); }
+      const compact = (div, suffix) => r / div < 999.95 ? (r / div).toFixed(1) + suffix : null;
+      return compact(1000, 'k') || compact(1e6, 'M') || compact(1e9, 'B') || compact(1e12, 'T')
+        || (r / 1e12).toExponential(1) + 'T';
+    }
+
+    // Burn speed in the primary unit, the second unit alongside for z-ai
+    // («412 cr/hr · $1.42/hr»); claude-ai and every non-z-ai provider show dollars only.
+    // Both values come from the one prediction engine, so they never diverge.
+    function speedText(prediction, units, providerType) {
+      const usd = '$' + prediction.currentBurnRate.toFixed(2) + i18n.perHour;
+      const both = providerType === 'z-ai' && prediction.burnRateCreditsPerHour > 0;
+      if (!both) { return usd; }
+      const cr = i18n.creditsPerHour.replace('__N__', fmtCreditsNum(prediction.burnRateCreditsPerHour));
+      return units && units.primary === 'credits' ? cr + ' · ' + usd : usd + ' · ' + cr;
+    }
+
     function updateUsage(usage, mode) {
       const denied = usage.limitStatus === 'denied';
       const hasRateData = usage.showRateData === true;
@@ -624,12 +790,14 @@ export function getWebviewContent(
 
       if (useCostMode) {
         const resetSuffix5h = hasRateData && usage.resetIn5h > 0
-          ? ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h) : '';
+          ? ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h)
+            + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn5h) + ')' : '';
         document.getElementById('usage-5h-label').textContent =
           '$' + usage.cost5h.toFixed(2) + resetSuffix5h;
         if (show7d) {
           document.getElementById('usage-7d-label').textContent =
-            '$' + usage.cost7d.toFixed(2) + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
+            '$' + usage.cost7d.toFixed(2) + ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d)
+            + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn7d) + ')';
         }
       } else {
         // percent mode — claude-ai and z-ai. The denial mark belongs on the window that is
@@ -641,11 +809,13 @@ export function getWebviewContent(
           denied && usage.utilization5h < 1 && !(show7d && usage.utilization7d >= 1);
         document.getElementById('usage-5h-label').textContent =
           pct(usage.utilization5h) + mark(usage.utilization5h, deniedWithoutFullWindow) +
-          ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h);
+          ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn5h)
+          + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn5h) + ')';
         if (show7d) {
           document.getElementById('usage-7d-label').textContent =
             pct(usage.utilization7d) + mark(usage.utilization7d, false) +
-            ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d);
+            ' — ' + i18n.resetsIn + ' ' + fmt(usage.resetIn7d)
+            + ' (' + i18n.atTime + ' ' + clockIn(usage.resetIn7d) + ')';
         }
       }
 
@@ -705,6 +875,40 @@ export function getWebviewContent(
         i18n.lastUpdated + ' ' + ageStr + srcLabel;
     }
 
+    // The Now panel's extra rows: peak mark (z-ai inside the window only — claude-ai has no
+    // peak object at all), burn speed in the two units, and the quota reconciliation. Each
+    // row appears only when its data is present, so every provider but z-ai in-peak shows
+    // an empty (or speed-only) block.
+    function updateNowPanel(data) {
+      const el = document.getElementById('now-extra');
+      if (!el) { return; }
+      let html = '';
+
+      const peak = data.peak;
+      if (peak && peak.active) {
+        html += '<div class="prediction-row">⚡ ' +
+          i18n.peakUntil.replace('__T__', esc(peak.windowEndLocal)) + '</div>';
+      }
+
+      const prediction = data.prediction;
+      if (prediction && (prediction.currentBurnRate > 0 || prediction.burnRateCreditsPerHour > 0)) {
+        html += '<div class="cost-row"><span class="cost-label">' + i18n.burnRate + '</span>' +
+          '<span>' + speedText(prediction, data.units, data.usage.providerType) + '</span></div>';
+      }
+
+      // «local §2.8k · quota §3.1k over 5h» — the local count runs over the quota window
+      // (reset − 5h → now, counted host-side), so a systematic gap means the local
+      // multipliers drift from the tariff z.ai actually charges.
+      const rec = data.reconcile;
+      if (rec) {
+        html += '<div class="prediction-row now-note">' + i18n.reconcile5h
+          .replace('__N__', '§' + fmtCreditsNum(rec.localCredits))
+          .replace('__N2__', '§' + fmtCreditsNum(rec.quotaUsed)) + '</div>';
+      }
+
+      el.innerHTML = html;
+    }
+
     function updateProjectCosts(projectCosts) {
       const el = document.getElementById('project-cost-content');
       if (!projectCosts || projectCosts.length === 0) {
@@ -742,7 +946,7 @@ export function getWebviewContent(
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    function updatePrediction(prediction, usage, settings) {
+    function updatePrediction(prediction, usage, settings, units) {
       const el = document.getElementById('prediction-content');
       if (!prediction) {
         el.innerHTML = '<div class="placeholder">' + i18n.noPredictionData + '</div>';
@@ -751,13 +955,21 @@ export function getWebviewContent(
 
       let html = '';
 
-      // Burn rate
+      // Burn rate — the same two-unit speed line the Now panel shows (one engine, both units)
       if (prediction.currentBurnRate > 0) {
         html += '<div class="cost-row"><span class="cost-label">' + i18n.burnRate + '</span>' +
-          '<span>$' + prediction.currentBurnRate.toFixed(2) + i18n.perHour + '</span></div>';
+          '<span>' + speedText(prediction, units, usage.providerType) + '</span></div>';
       } else {
         html += '<div class="cost-row"><span class="cost-label">' + i18n.burnRate + '</span>' +
           '<span class="placeholder">' + i18n.calculating + '</span></div>';
+      }
+
+      // Credit path: the remaining § of the live 5h quota the forecast ran against. Present
+      // only when the quota reported absolute amounts fresh enough to act on (the host
+      // gates creditsRemaining5h on actsOnRateData) — a stale remainder predicts nothing.
+      if (prediction.creditsRemaining5h !== null && typeof prediction.creditsRemaining5h === 'number') {
+        html += '<div class="cost-row"><span class="cost-label">' + i18n.creditsLeft5h + '</span>' +
+          '<span>§' + fmtCreditsNum(prediction.creditsRemaining5h) + '</span></div>';
       }
 
       // Rate limit exhaustion alert
@@ -835,6 +1047,7 @@ export function getWebviewContent(
         'warning':            i18n.recWarning,
         'critical':           i18n.recCritical,
         'rate-limit-reached': i18n.recRateLimitReached,
+        'survives-reset':     i18n.recSurvivesReset,
       };
       const recText = recI18n[prediction.recommendationKey] || esc(prediction.recommendation);
       html += '<div class="prediction-row" style="margin-top:8px">💡 ' + recText + '</div>';
@@ -1306,8 +1519,9 @@ export function getWebviewContent(
         if (refreshing) { setRefreshing(false); }
         lastData = msg.data;
         updateUsage(msg.data.usage, currentMode);
+        updateNowPanel(msg.data);
         updateProjectCosts(msg.data.projectCosts);
-        updatePrediction(msg.data.prediction, msg.data.usage, msg.data.settings);
+        updatePrediction(msg.data.prediction, msg.data.usage, msg.data.settings, msg.data.units);
         updatePredictionChart(msg.data.usage, msg.data.prediction);
         if (msg.data.heatmap) { updateHeatmap(msg.data.heatmap); }
         // Refresh open panels on data update
@@ -1363,6 +1577,17 @@ export class DashboardPanel {
     // Push data updates to the WebView
     this.disposables.push(
       dataManager.onDidUpdate(data => { this.sendUpdate(data).catch(() => {}); })
+    );
+
+    // A primaryUnit change re-renders at once from the last data, without waiting for the
+    // next data cycle — the setting changes presentation only.
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration(
+        makeConfigChangeHandler(
+          () => this.dataManager.getLastData(),
+          data => { this.sendUpdate(data).catch(() => {}); },
+        ),
+      ),
     );
 
     // Clean up when panel is closed
@@ -1428,22 +1653,26 @@ export class DashboardPanel {
   private async sendUpdate(usage: ClaudeUsageData): Promise<void> {
     const prediction = await this.dataManager.getPrediction();
     const heatmap = this.dataManager.getLastHeatmapData();
-    const message: { type: string; data: DashboardMessage } = {
-      type: 'update',
-      data: {
-        usage: dashboardUsage(usage),
-        projectCosts: this.dataManager.getLastProjectCosts(),
-        prediction,
-        heatmap,
-        pricing: config.tokenPricing,
-        settings: {
-          provider: usage.providerType,
-          apiEnabled: config.rateLimitApiEnabled,
-          cacheTtlSeconds: config.cacheTtlSeconds,
-          weeklyBudget: config.weeklyBudget,
-        },
-      },
-    };
+    // Local § over the quota window — counted only when the quota's own used § is on
+    // screen, so the reconciliation row never appears against absent quota data. A read
+    // failure just hides the row (fail-soft), never the rest of the update.
+    const quotaOnScreen = usage.credits5h !== undefined
+      && showsRateData(usage.providerType, usage.dataSource);
+    const quotaWindowCredits = quotaOnScreen
+      ? await readQuotaWindowCredits(quotaWindowStartMs(usage.resetIn5h, Date.now())).catch(() => null)
+      : null;
+    const message = buildUpdatePayload({
+      usage,
+      prediction,
+      heatmap,
+      projectCosts: this.dataManager.getLastProjectCosts(),
+      pricing: config.tokenPricing,
+      apiEnabled: config.rateLimitApiEnabled,
+      cacheTtlSeconds: config.cacheTtlSeconds,
+      weeklyBudget: config.weeklyBudget,
+      primaryUnitSetting: config.primaryUnitSetting,
+      quotaWindowCredits,
+    });
     this.panel.webview.postMessage(message);
   }
 
