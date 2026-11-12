@@ -1,8 +1,8 @@
 import * as fs from 'fs/promises';
-import { Dirent } from 'fs';
+import type { Dirent } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { TokenUsage } from './pricing';
+import type { TokenUsage } from './pricing';
 import { atomicWriteJson } from './atomicWrite';
 
 export function getClaudeProjectsDir(): string {

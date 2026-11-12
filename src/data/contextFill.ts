@@ -46,12 +46,22 @@ export function resolveContextWindow(model: string | undefined, maxTokensOverrid
   return maxTokensOverride ?? CONTEXT_WINDOW_DEFAULT;
 }
 
+/**
+ * Parse CLAUDE_CODE_MAX_CONTEXT_TOKENS into a positive integer window, or null when the
+ * value is absent/invalid. Floor-then-check: "0.5" must fall back to null, not floor to
+ * a zero window (fillRatio would divide by zero, nearLimit would light on everything).
+ */
+export function parseContextWindowOverride(raw: string): number | null {
+  const n = Number(raw.trim());
+  const window = Math.floor(n);
+  return Number.isFinite(n) && window >= 1 ? window : null;
+}
+
 /** CLAUDE_CODE_MAX_CONTEXT_TOKENS from the Claude Code environment (env → settings.json → settings.local.json), as a positive integer or null. */
 export async function readContextOverride(): Promise<number | null> {
   const raw = await readClaudeEnvVar('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
   if (raw === null) { return null; }
-  const n = Number(raw.trim());
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  return parseContextWindowOverride(raw);
 }
 
 export interface ContextFill {

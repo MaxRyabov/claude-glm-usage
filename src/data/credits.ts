@@ -19,6 +19,9 @@ export interface CreditMultipliers {
 // GLM-5.3 base tier (quota handbook multipliers; see add-statusbar-peak-ctx-units D7).
 export const GLM_CREDIT_MULTIPLIERS: CreditMultipliers = { input: 6.9, cacheRead: 1.7, output: 24 };
 // Flash tier carries the triple discount, matching the published price ratio.
+// Note the USD table (pricing.ts) marks older flash tiers ZERO_PRICING — that is an
+// estimate of out-of-plan cost, while the plan still bills credits for every GLM/flash
+// turn: the two tables are independent tariffs, not two views of one.
 export const GLM_FLASH_CREDIT_MULTIPLIERS: CreditMultipliers = { input: 2.3, cacheRead: 0.56, output: 8 };
 
 export const CREDITS_DIVISOR = 10_000;

@@ -6,9 +6,11 @@
 // turn costs half. Other providers (Anthropic) have no peak tariff, so
 // peakStatus returns null for them and no peak UI is shown.
 
-/** Peak window boundaries, minutes since UTC midnight (start inclusive, end exclusive). */
-const PEAK_START_UTC_MIN = 6 * 60;
-const PEAK_END_UTC_MIN = 10 * 60;
+/** Peak window boundaries, UTC hours (start inclusive, end exclusive). */
+const PEAK_START_UTC_HOUR = 6;
+const PEAK_END_UTC_HOUR = 10;
+const PEAK_START_UTC_MIN = PEAK_START_UTC_HOUR * 60;
+const PEAK_END_UTC_MIN = PEAK_END_UTC_HOUR * 60;
 const PEAK_WINDOW_MS = (PEAK_END_UTC_MIN - PEAK_START_UTC_MIN) * 60_000;
 
 export interface PeakStatus {
@@ -36,7 +38,7 @@ export function isPeakAt(timestampMs: number): boolean {
 /** Start (06:00 UTC) of the nearest window: today's while it is active or not yet begun, else the next weekday's. */
 function nearestWindowStart(now: Date): number {
   const start = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, PEAK_START_UTC_MIN),
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), PEAK_START_UTC_HOUR),
   );
   if (start.getTime() > now.getTime()) {
     // Today's window has not begun: use it on a weekday, else roll forward.
@@ -54,16 +56,18 @@ function nearestWindowStart(now: Date): number {
 }
 
 function localTimeLabel(date: Date, timeZone?: string): string {
-  // en-GB + hour12:false gives a stable "HH:MM" 24-hour label for every locale.
+  // en-GB + hourCycle h23 gives a stable "HH:MM" 24-hour label for every locale. h23
+  // (not hour12:false) guarantees 00–23: some ICU builds render midnight as "24:00"
+  // under hour12:false, and for UTC−6..−10 zones the window start lands on midnight.
   // An invalid timeZone (user config is free text) falls back to the machine zone
   // instead of throwing RangeError out of peakStatus.
   try {
     return new Intl.DateTimeFormat('en-GB', {
-      hour: '2-digit', minute: '2-digit', hour12: false, timeZone,
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone,
     }).format(date);
   } catch {
     return new Intl.DateTimeFormat('en-GB', {
-      hour: '2-digit', minute: '2-digit', hour12: false,
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
     }).format(date);
   }
 }

@@ -39,6 +39,12 @@ export interface TimestampedTurn {
   credits: number    // z.ai credits (0 for non-GLM turns)
 }
 
+/** Sliding window the burn rate is measured over (both units, one engine). */
+const SPEED_WINDOW_MS = 30 * 60 * 1000;
+
+/** A heavy task needs at least this much runway left (seconds) to be "safe" to start. */
+const SAFE_HEAVY_TASK_THRESHOLD_SECONDS = 1800;
+
 async function readRecentTurns(windowMs: number, ctx: PricingContext = {}): Promise<TimestampedTurn[]> {
   const now = Date.now();
   const cutoff = now - windowMs;
@@ -129,7 +135,7 @@ export function quotaCreditsRemaining(quota: QuotaAmounts): number {
 }
 
 export async function computePrediction(input: PredictionInput): Promise<PredictionData> {
-  const turns = await readRecentTurns(30 * 60 * 1000, input.pricingCtx);
+  const turns = await readRecentTurns(SPEED_WINDOW_MS, input.pricingCtx);
   return predictFromTurns(input, turns);
 }
 
@@ -180,14 +186,14 @@ export function predictFromTurns(input: PredictionInput, turns: ReadonlyArray<Ti
         recommendation = 'The 5h window will not be exhausted before the reset.';
         recommendationKey = 'survives-reset';
       } else {
-        // Cap at reset time — exhaustion can't be after the window resets.
-        const effectiveSeconds = Math.min(secondsUntilExhaustion, resetIn5h);
-        estimatedExhaustionTime = new Date(Date.now() + effectiveSeconds * 1000);
-        estimatedExhaustionIn = effectiveSeconds;
+        // The branch condition guarantees secondsUntilExhaustion < resetIn5h here — the
+        // exhaustion lands before the reset, no extra cap needed.
+        estimatedExhaustionTime = new Date(Date.now() + secondsUntilExhaustion * 1000);
+        estimatedExhaustionIn = secondsUntilExhaustion;
         exhaustsBeforeReset = true;
-        safeToStartHeavyTask = effectiveSeconds > 1800;
-        recommendation = buildRecommendation(effectiveSeconds);
-        recommendationKey = buildRecommendationKey(effectiveSeconds);
+        safeToStartHeavyTask = secondsUntilExhaustion > SAFE_HEAVY_TASK_THRESHOLD_SECONDS;
+        recommendation = buildRecommendation(secondsUntilExhaustion);
+        recommendationKey = buildRecommendationKey(secondsUntilExhaustion);
       }
     }
     // Zero credits burn (no turns in the window) → no exhaustion forecast at all.
@@ -202,7 +208,7 @@ export function predictFromTurns(input: PredictionInput, turns: ReadonlyArray<Ti
 
     estimatedExhaustionTime = new Date(Date.now() + effectiveSeconds * 1000);
     estimatedExhaustionIn = effectiveSeconds;
-    safeToStartHeavyTask = effectiveSeconds > 1800;
+    safeToStartHeavyTask = effectiveSeconds > SAFE_HEAVY_TASK_THRESHOLD_SECONDS;
     recommendation = buildRecommendation(effectiveSeconds);
     recommendationKey = buildRecommendationKey(effectiveSeconds);
   }

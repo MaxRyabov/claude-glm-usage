@@ -828,8 +828,10 @@ export function getWebviewContent(
       if (row7d) { row7d.style.display = show7d ? '' : 'none'; }
 
       if (useCostMode) {
+        // Without rate data (auth-rejected / local-only) the cached resetIn5h belongs to
+        // a dead or stale poll — main gated this suffix on hasRateData, keep that gate.
         document.getElementById('usage-5h-label').textContent =
-          '$' + usage.cost5h.toFixed(2) + resetSuffix(usage.resetIn5h);
+          '$' + usage.cost5h.toFixed(2) + resetSuffix(hasRateData ? usage.resetIn5h : 0);
         if (show7d) {
           document.getElementById('usage-7d-label').textContent =
             '$' + usage.cost7d.toFixed(2) + resetSuffix(usage.resetIn7d);
@@ -988,8 +990,10 @@ export function getWebviewContent(
 
       let html = '';
 
-      // Burn rate — the same two-unit speed line the Now panel shows (one engine, both units)
-      if (prediction.currentBurnRate > 0) {
+      // Burn rate — the same two-unit speed line the Now panel shows (one engine, both
+      // units). Same gate as updateNowPanel: a credits-only z-ai stream (0 $/h, > 0 §/h)
+      // must show its real speed here too, not a bogus "Calculating…".
+      if (prediction.currentBurnRate > 0 || prediction.burnRateCreditsPerHour > 0) {
         html += '<div class="cost-row"><span class="cost-label">' + i18n.burnRate + '</span>' +
           '<span>' + speedText(prediction, units, usage.providerType) + '</span></div>';
       } else {

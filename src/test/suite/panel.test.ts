@@ -327,6 +327,12 @@ suite('Now panel page logic', () => {
       html.includes('const usd = prediction.currentBurnRate > 0'),
       'the dollar part renders only for a real dollar rate',
     );
+    // The Prediction card gates on the same two-unit condition as the Now panel: a
+    // credits-only stream (0 $/h, > 0 §/h) shows its real speed, not "Calculating…".
+    assert.ok(
+      html.includes('prediction.currentBurnRate > 0 || prediction.burnRateCreditsPerHour > 0'),
+      'both speed renderers share one gate',
+    );
   });
 
   test('the reconciliation row uses the quota-window template', () => {
@@ -335,10 +341,15 @@ suite('Now panel page logic', () => {
   });
 
   test('reset labels carry the absolute clock next to the relative duration', () => {
-    assert.ok(html.includes('resetSuffix(usage.resetIn5h)'), 'the 5h label names the reset clock time');
+    // Cost mode must keep main's hasRateData gate: without rate data the cached reset
+    // belongs to a dead poll and must not render (percent mode implies hasRateData).
+    assert.ok(
+      html.includes('resetSuffix(hasRateData ? usage.resetIn5h : 0)'),
+      'the 5h cost-mode label gates the reset clock on rate data',
+    );
     assert.ok(html.includes('resetSuffix(usage.resetIn7d)'), 'the 7d label names the reset clock time');
     assert.ok(
-      html.includes('function resetSuffix(seconds) {\n      return seconds > 0'),
+      /function resetSuffix\(seconds\) \{\s*return seconds > 0/.test(html),
       'one suffix helper gates both modes and both windows: an absent reset (0) must not read "resets in 0m (at <now>)"',
     );
   });

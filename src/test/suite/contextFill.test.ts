@@ -4,6 +4,7 @@ import * as path from 'path';
 import {
   resolveContextWindow,
   computeContextFill,
+  parseContextWindowOverride,
   CONTEXT_WARN_MARGIN_TOKENS,
 } from '../../data/contextFill';
 import type { ContextFill } from '../../data/contextFill';
@@ -43,6 +44,23 @@ suite('resolveContextWindow', () => {
     assert.strictEqual(resolveContextWindow('GLM-5.3 [1M]', null), 1_000_000);
     // …and beats an explicit override too.
     assert.strictEqual(resolveContextWindow('glm-4.6 [1m]', 400_000), 1_000_000);
+  });
+});
+
+suite('parseContextWindowOverride', () => {
+  test('a positive integer (or an integer-valued float) passes through', () => {
+    assert.strictEqual(parseContextWindowOverride('400000'), 400_000);
+    assert.strictEqual(parseContextWindowOverride(' 400000 '), 400_000);
+    assert.strictEqual(parseContextWindowOverride('400000.0'), 400_000);
+  });
+
+  test('anything that would floor below 1 token falls back to null, never to 0', () => {
+    // "0.5" passes a naive n > 0 check but floors to a zero window: fillRatio would
+    // divide by zero and nearLimit would light up on an empty context.
+    assert.strictEqual(parseContextWindowOverride('0.5'), null);
+    assert.strictEqual(parseContextWindowOverride('0'), null);
+    assert.strictEqual(parseContextWindowOverride('-1000'), null);
+    assert.strictEqual(parseContextWindowOverride('not-a-number'), null);
   });
 });
 

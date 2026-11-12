@@ -210,8 +210,10 @@ export class DataManager {
       && cacheMatchesCredential(cacheRaw, credential)
       ? cacheRaw : null;
     // Context fill depends on neither the local usage read nor the quota poll — start it
-    // in parallel so its project-dir mapping adds nothing to the refresh latency.
-    const contextPromise = this.computeContextFill();
+    // in parallel so its project-dir mapping adds nothing to the refresh latency. The
+    // catch keeps a context failure (or a rejection landing before the await below) from
+    // becoming an unhandled rejection or killing the whole refresh: context is optional.
+    const contextPromise = this.computeContextFill().catch(() => null);
     const localUsage = await readAllUsage(this.pricingContext(providerType));
 
     let rateLimitData: RateLimitData | null = null;
