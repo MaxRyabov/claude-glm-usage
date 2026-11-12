@@ -10,8 +10,9 @@ import {
   TimestampedTurn,
 } from '../../data/prediction';
 
-// Two GLM turns half an hour apart: 2000 credits and $500 over ~0.5h → burn ≈ 4000 §/h,
-// ≈ $1000/h. Used by every predictFromTurns test so both engines always have data.
+// Two GLM turns 10 s apart near the 30-min window edge: 2000 credits and $500 spread
+// over the ~0.5 h from the OLDEST turn to now (the span the engine measures) → burn
+// ≈ 4000 §/h, ≈ $1000/h. Used by every predictFromTurns test so both engines have data.
 const turns = (): TimestampedTurn[] => {
   const now = Date.now();
   return [

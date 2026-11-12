@@ -36,6 +36,10 @@ suite('resolvePricing', () => {
     assert.strictEqual(flash.inputPerMillion, 0.15);
     assert.strictEqual(flash.cacheReadPerMillion, 0.03);
     assert.strictEqual(flash.outputPerMillion, 0.50);
+    // The builtin table wins before the provider default, so the same must hold with
+    // no providerType in the context at all.
+    assert.strictEqual(resolvePricing('glm-5.3').inputPerMillion, 1.40);
+    assert.strictEqual(resolvePricing('glm-5.3-flash').inputPerMillion, 0.15);
   });
 
   test('matches Claude models by prefix with version suffix', () => {

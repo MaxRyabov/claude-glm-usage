@@ -1,5 +1,4 @@
 import * as assert from 'assert';
-import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -128,8 +127,10 @@ function makeUsage(overrides: Partial<ClaudeUsageData> = {}): ClaudeUsageData {
     localCredits5h: 2871, localCreditsDay: 8000, localCredits7d: 21_000,
     tokensIn5h: 1000, tokensOut5h: 100, tokensCacheRead5h: 1000, tokensCacheCreate5h: 0,
     credits5h: { used: 3120, total: 28_000, remaining: 24_880 },
-    peak: PEAK,
-    context: CONTEXT,
+    // Fresh copies, not the shared mutable objects: a test (or the code under test)
+    // mutating usage.peak must not leak into every other fixture.
+    peak: overrides.peak ?? { ...PEAK },
+    context: overrides.context ?? { ...CONTEXT },
     lastUpdated: new Date(), cacheAge: 30, dataSource: 'api',
     ...overrides,
   };
@@ -395,7 +396,8 @@ suite('snapshot validator accepts the stage-4 optional fields', () => {
   test('a v1 snapshot whose usage still carries peak/context loads unchanged', async () => {
     // writeSnapshot strips the volatile fields, but the validator must not fail closed on
     // them either: v1 accepts new optional fields without a schema-version bump (D7).
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbcs-snapshot-'));
+    // (On read the volatile fields are dropped — pinned separately in snapshotCache.test.)
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sbcs-snapshot-'));
     const snapshotPath = path.join(dir, 'vscode-claude-status-snapshot.json');
     try {
       const usage = makeUsage({ providerType: 'z-ai', dataSource: 'api', cost5h: 42.42 });
@@ -413,7 +415,7 @@ suite('snapshot validator accepts the stage-4 optional fields', () => {
       assert.strictEqual(back.usage.providerType, 'z-ai');
       assert.strictEqual(back.usage.cost5h, 42.42, 'the temp file is the one being read');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      await fsp.rm(dir, { recursive: true, force: true });
     }
   });
 });

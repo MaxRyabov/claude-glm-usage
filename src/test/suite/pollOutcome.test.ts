@@ -310,6 +310,12 @@ suite('rebaseSnapshotResets', () => {
       rebaseSnapshotResets({ resetIn5h: H, resetIn7d: H }, now - 8 * H * 1000, now),
       { resetIn5h: 0, resetIn7d: 0 },
     );
+    // Exactly at the boundary — elapsed == resetIn5h — the window has just reset:
+    // 0, not a negative remainder; the 7d window keeps its positive leftover.
+    assert.deepStrictEqual(
+      rebaseSnapshotResets({ resetIn5h: H, resetIn7d: 2 * H }, now - H * 1000, now),
+      { resetIn5h: 0, resetIn7d: H },
+    );
     // Clock stepped back after the save: elapsed floors at 0.
     assert.deepStrictEqual(
       rebaseSnapshotResets({ resetIn5h: H, resetIn7d: 2 * H }, now, now - 5 * 1000),

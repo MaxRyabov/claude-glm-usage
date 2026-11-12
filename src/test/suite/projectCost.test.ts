@@ -116,6 +116,10 @@ suite('ProjectCost', () => {
       const offTs = lastUtcMoment(0, 12, 0);     // Sunday, always off-peak
       assert.ok(Date.now() - peakTs < 7 * 24 * 3600 * 1000, 'helper stays inside the 7d window');
       assert.ok(Date.now() - offTs < 7 * 24 * 3600 * 1000, 'helper stays inside the 7d window');
+      // Pin the classification itself: if these ever fail, it is the peak window that
+      // changed, not the credit arithmetic below.
+      assert.strictEqual(isPeakAt(peakTs), true, 'fixture: Tuesday 07:30 UTC is peak');
+      assert.strictEqual(isPeakAt(offTs), false, 'fixture: Sunday 12:00 UTC is off-peak');
 
       const usage = {
         input_tokens: 100_000, output_tokens: 50_000,

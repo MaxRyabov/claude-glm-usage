@@ -63,12 +63,14 @@ suite('peakStatus', () => {
     assert.ok(st);
     assert.strictEqual(st.active, false);
     assert.strictEqual(st.windowStartMs, Date.UTC(2026, 10, 11, 6));   // Wednesday
+    assert.strictEqual(st.windowEndMs, Date.UTC(2026, 10, 11, 10), 'end = start + 4h');
   });
 
-  test('Friday afternoon rolls over the weekend to Monday', () => {
+  test('Friday after the window rolls over the weekend to Monday', () => {
     const st = peakStatus(FRI_11, 'z-ai', 'UTC');
     assert.ok(st);
     assert.strictEqual(st.windowStartMs, Date.UTC(2026, 10, 16, 6));   // next Monday
+    assert.strictEqual(st.windowEndMs, Date.UTC(2026, 10, 16, 10), 'end = start + 4h');
   });
 
   test('default (machine) timezone still yields HH:MM labels and a UTC± label', () => {
