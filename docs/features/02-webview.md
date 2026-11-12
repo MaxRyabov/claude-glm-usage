@@ -174,7 +174,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 panel.webview.postMessage({
   type: 'update',
   data: {
-    usage: ClaudeUsageData,            // + showRateData: boolean, decided by the host
+    usage: ClaudeUsageData & { showRateData: boolean },
+                                       // showRateData is decided by the host
                                        //   (dashboardUsage in src/data/pollOutcome.ts)
     projectCosts: ProjectCostData[],   // array (multi-root aware)
     prediction: PredictionData | null, // extended: burnRateCreditsPerHour,
@@ -215,7 +216,7 @@ The first card renders the quota windows plus, when their data is present:
 
 | Row | Shown when | Content |
 |-----|------------|---------|
-| Window labels | rate data on screen | `78% — resets in 2h 47m (at 14:23)` — the relative duration plus the absolute clock of the reset (from `resetIn5h`, i.e. `reset5hAt`) |
+| Window labels | rate data on screen | `78% — resets in 2h 47m (at 14:23)` — the relative duration from `resetIn5h` plus the absolute clock of the reset (`now + resetIn5h`, local time; `reset5hAt` itself is not carried on the wire) |
 | `⚡ Peak until 13:00` | `peak && peak.active` (z-ai inside the window) | the local end of the peak window; claude-ai gets no `peak` object at all |
 | `Burn rate` | a positive speed | `412 cr/hr · $1.42/hr` for z-ai — primary unit first, the second one alongside; claude-ai shows dollars only |
 | `local §2.8k · quota §3.1k over 5h` | `reconcile` present | local § counted over the quota window (`reset5hAt − 5h` → now, **not** the rolling five hours) against `credits5h.used` — a systematic gap means the local credit multipliers drift from the tariff |

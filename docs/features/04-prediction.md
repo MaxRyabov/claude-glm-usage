@@ -21,6 +21,7 @@ UI prefixes to credit amounts:
 export function calculateBurnRate(entries: ReadonlyArray<{ timestamp: number; cost: number }>): number
 export function calculateCreditsBurnRate(entries: ReadonlyArray<{ timestamp: number; credits: number }>): number
 // Both: fewer than 2 turns → 0; otherwise sum ÷ (now − earliest turn), per hour.
+// A non-positive span (equal timestamps, clock skew) yields 0 — never Infinity/NaN.
 // The engine (readRecentTurns) feeds them timestamp-sorted turns, so entries[0] is
 // always the earliest turn of the window.
 ```
@@ -85,11 +86,14 @@ utilization fallback (step 4):
      after the window resets), `creditsRemaining5h` carries the remaining credits (§).
 4. **Utilization fallback** — no absolute amounts: estimate capacity from
    `spend5h / utilization5h`, remaining share `× (1.0 − utilization5h)`, divide by the
-   burn rate **in spend5h's own unit** (`fallbackUnit`), cap at `resetIn5h`.
+   burn rate **in spend5h's own unit** (`fallbackUnit`), cap at `resetIn5h`. Both the
+   utilization and the burn rate must be positive — otherwise no forecast is built.
 5. `safeToStartHeavyTask = effectiveSeconds > 1800` (30 min threshold), where
    `effectiveSeconds = min(exhaustion estimate, resetIn5h)` — the seconds until whichever
    comes first, exhaustion or the window reset (both branches above already cap at
-   `resetIn5h`, so effectiveSeconds equals the resulting `estimatedExhaustionIn`).
+   `resetIn5h`, so in every branch that built a forecast effectiveSeconds equals the
+   resulting `estimatedExhaustionIn`; when no forecast was built — survives-reset, zero
+   burn, or insufficient data — `safeToStartHeavyTask` keeps its `true` default).
 
 Field units of `PredictionData`: `estimatedExhaustionIn` — seconds from now;
 `estimatedExhaustionTime` / `budgetExhaustionTime` — absolute `Date` moments;

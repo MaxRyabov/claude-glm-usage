@@ -46,7 +46,7 @@ What the status bar and dashboard show, depending on your Claude plan and key se
 | Claude.ai — prefer cost over % | `displayMode: "cost"` |
 | Claude.ai — offline / no outbound HTTPS | `rateLimitApi.enabled: false` (cached % still shown if previously fetched) |
 | z.ai — see spends in plan credits (§) | `display.primaryUnit: "auto"` (default; cost segments show `§2.8k`-style credits) |
-| z.ai — force credits even if the provider detection changes | `display.primaryUnit: "credits"` (z-ai only; on providers without a credit tariff it degrades to dollars) |
+| z.ai — prefer credits explicitly | `display.primaryUnit: "credits"` (behaves like `auto`: z-ai shows credits; providers without a credit tariff degrade to dollars) |
 | z.ai — see spends in dollars | `display.primaryUnit: "usd"` |
 | AWS Bedrock / API key | No extra config needed — cost mode is automatic |
 | Track spending against a budget | Set `budget.dailyUsd` in dashboard or settings |

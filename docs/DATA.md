@@ -130,14 +130,19 @@ export function creditsForEntry(entry: CreditEntry, peakActive: boolean): number
 >   billing terms here, so the local credit count converges with the quota only *up to
 >   MCP usage* — the dashboard reconciliation line ("local §X · by quota §Y over 5h")
 >   shows exactly this residual.
+> - **Multiplier source:** the two tables above are z.ai plan constants (credits per
+>   10k tokens per token class) from the z.ai quota handbook, re-verified 2026-11-10
+>   against a live session — they are not user-configurable.
 
 ### Peak Hours (z.ai) — `src/data/peakHours.ts`
 
 The peak window is a **tariff constant in UTC** (not configurable; z.ai fixes it):
 
 ```typescript
-const PEAK_START_UTC_MIN = 6 * 60;   // 06:00 UTC, inclusive
-const PEAK_END_UTC_MIN = 10 * 60;    // 10:00 UTC, exclusive (14:00–18:00 SGT)
+const PEAK_START_UTC_HOUR = 6;       // 06:00 UTC, inclusive
+const PEAK_END_UTC_HOUR = 10;        // 10:00 UTC, exclusive (14:00–18:00 SGT)
+const PEAK_START_UTC_MIN = PEAK_START_UTC_HOUR * 60;
+const PEAK_END_UTC_MIN = PEAK_END_UTC_HOUR * 60;
 
 export function isPeakAt(timestampMs: number): boolean {
   const d = new Date(timestampMs);
