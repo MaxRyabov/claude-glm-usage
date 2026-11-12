@@ -1,12 +1,15 @@
 import * as assert from 'assert';
-import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { readSnapshot, writeSnapshot, SnapshotInput } from '../../data/snapshotCache';
 import type { ClaudeUsageData } from '../../data/dataManager';
 
-const snapshotPath = path.join(os.homedir(), '.claude', 'vscode-claude-status-snapshot.json');
+// Every test reads and writes an isolated temp file — never the production path under
+// ~/.claude, which the user's running extension owns (both snapshotCache functions take
+// an explicit filePath for exactly this reason).
+let tmpDir: string;
+let snapshotPath: string;
 
 function makeUsage(): ClaudeUsageData {
   return {
@@ -20,25 +23,15 @@ function makeUsage(): ClaudeUsageData {
 }
 
 suite('snapshotCache', () => {
-  // The snapshot file lives at the production path; back it up so tests never clobber it.
-  let backup: string | null = null;
-  const claudeDirExists = fs.existsSync(path.dirname(snapshotPath));
-
-  suiteSetup(() => {
-    if (!claudeDirExists) { return; }
-    try { backup = fs.readFileSync(snapshotPath, 'utf-8'); } catch { backup = null; }
+  suiteSetup(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sbcs-snapshot-'));
+    snapshotPath = path.join(tmpDir, 'vscode-claude-status-snapshot.json');
   });
-  suiteTeardown(() => {
-    if (!claudeDirExists) { return; }
-    try {
-      if (backup !== null) { fs.writeFileSync(snapshotPath, backup, { mode: 0o600 }); }
-      else { fs.rmSync(snapshotPath, { force: true }); }
-    } catch { /* ignore */ }
+  suiteTeardown(async () => {
+    await fsp.rm(tmpDir, { recursive: true, force: true });
   });
 
-  const maybe = claudeDirExists ? test : test.skip;
-
-  maybe('round-trips a snapshot, reviving Date fields', async () => {
+  test('round-trips a snapshot, reviving Date fields', async () => {
     const snap: SnapshotInput = {
       usage: makeUsage(),
       projectCosts: [{
@@ -48,9 +41,9 @@ suite('snapshotCache', () => {
       }],
       heatmap: { daily: [], hourly: [], generatedAt: new Date('2026-01-03T00:00:00.000Z') },
     };
-    await writeSnapshot(snap);
+    await writeSnapshot(snap, snapshotPath);
 
-    const back = await readSnapshot();
+    const back = await readSnapshot(snapshotPath);
     assert.ok(back, 'snapshot should read back');
     assert.strictEqual(back!.usage.cost5h, 1.23);
     assert.ok(back!.usage.lastUpdated instanceof Date, 'lastUpdated revived to Date');
@@ -60,20 +53,20 @@ suite('snapshotCache', () => {
     assert.ok(back!.heatmap && back!.heatmap.generatedAt instanceof Date);
   });
 
-  maybe('returns null for an invalid snapshot file', async () => {
+  test('returns null for an invalid snapshot file', async () => {
     await fsp.writeFile(snapshotPath, JSON.stringify({ version: 999, garbage: true }), 'utf-8');
-    assert.strictEqual(await readSnapshot(), null);
+    assert.strictEqual(await readSnapshot(snapshotPath), null);
   });
 
-  maybe('fails closed when a required discriminator field is missing (schema drift)', async () => {
+  test('fails closed when a required discriminator field is missing (schema drift)', async () => {
     const usage = makeUsage() as unknown as Record<string, unknown>;
     delete usage.providerType;   // simulate an older-schema snapshot
     const file = { version: 1, savedAt: new Date().toISOString(), usage, projectCosts: [], heatmap: null };
     await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
-    assert.strictEqual(await readSnapshot(), null);
+    assert.strictEqual(await readSnapshot(snapshotPath), null);
   });
 
-  maybe('defaults missing localCredits* fields from an older snapshot', async () => {
+  test('defaults missing localCredits* fields from an older snapshot', async () => {
     // A v1 snapshot written before PR #18 has no localCredits* — the fields must read
     // as 0, not undefined, or the z-ai forecast gets NaN spend5h before the first refresh.
     const usage = makeUsage() as unknown as Record<string, unknown>;
@@ -83,14 +76,36 @@ suite('snapshotCache', () => {
     const file = { version: 1, savedAt: new Date().toISOString(), usage, projectCosts: [], heatmap: null };
     await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
 
-    const back = await readSnapshot();
+    const back = await readSnapshot(snapshotPath);
     assert.ok(back, 'older snapshot still reads (defaults fill the gap)');
     assert.strictEqual(back.usage.localCredits5h, 0);
     assert.strictEqual(back.usage.localCreditsDay, 0);
     assert.strictEqual(back.usage.localCredits7d, 0);
   });
 
-  maybe('strips the volatile peak and context fields before persisting', async () => {
+  test('defaults missing projectCost credit columns from an older snapshot', async () => {
+    // Same gap-between-versions protection as localCredits*: a snapshot written before
+    // the credit columns existed must not leak undefined into formatCredits.
+    const file = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      usage: makeUsage(),
+      projectCosts: [{
+        projectName: 'demo', projectPath: '/tmp/demo', costToday: 1, cost7d: 2, cost30d: 3,
+        sessionCount: 1, lastActive: '2026-01-02T00:00:00.000Z',
+      }],
+      heatmap: null,
+    };
+    await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
+
+    const back = await readSnapshot(snapshotPath);
+    assert.ok(back);
+    assert.strictEqual(back.projectCosts[0].creditsToday, 0);
+    assert.strictEqual(back.projectCosts[0].credits7d, 0);
+    assert.strictEqual(back.projectCosts[0].credits30d, 0);
+  });
+
+  test('strips the volatile peak and context fields before persisting', async () => {
     const usage = makeUsage();
     usage.peak = {
       active: true, windowStartMs: 1_762_000_000_000, windowEndMs: 1_762_014_400_000,
@@ -99,7 +114,7 @@ suite('snapshotCache', () => {
     usage.context = {
       model: 'glm-4.6', windowTokens: 200_000, usedTokens: 76_000, fillRatio: 0.38, nearLimit: false,
     };
-    await writeSnapshot({ usage, projectCosts: [], heatmap: null });
+    await writeSnapshot({ usage, projectCosts: [], heatmap: null }, snapshotPath);
 
     const raw = JSON.parse(await fsp.readFile(snapshotPath, 'utf-8')) as Record<string, unknown>;
     const stored = raw.usage as Record<string, unknown>;
@@ -107,9 +122,24 @@ suite('snapshotCache', () => {
     assert.ok(!('context' in stored), 'context is per-refresh state and must not reach the disk');
     assert.strictEqual(stored.localCredits5h, 2.5, 'the persisted credit windows survive the strip');
 
-    const back = await readSnapshot();
+    const back = await readSnapshot(snapshotPath);
     assert.ok(back);
     assert.strictEqual(back.usage.peak, undefined);
     assert.strictEqual(back.usage.context, undefined);
+  });
+
+  test('an old-format file still carrying peak/context reads back without them', async () => {
+    // writeSnapshot strips the volatile fields now, but a file written before the strip
+    // landed must not resurrect a stale peak/context on read either.
+    const usage = makeUsage() as unknown as Record<string, unknown>;
+    usage.peak = { active: true, windowStartLocal: '09:00', windowEndLocal: '13:00' };
+    usage.context = { model: 'glm-4.6', windowTokens: 200_000, usedTokens: 76_000 };
+    const file = { version: 1, savedAt: new Date().toISOString(), usage, projectCosts: [], heatmap: null };
+    await fsp.writeFile(snapshotPath, JSON.stringify(file), 'utf-8');
+
+    const back = await readSnapshot(snapshotPath);
+    assert.ok(back, 'the file is otherwise valid');
+    assert.strictEqual(back.usage.peak, undefined, 'a stale peak never reaches consumers');
+    assert.strictEqual(back.usage.context, undefined, 'a stale context never reaches consumers');
   });
 });

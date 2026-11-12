@@ -34,12 +34,17 @@ function getSnapshotPath(): string {
   return path.join(os.homedir(), '.claude', 'vscode-claude-status-snapshot.json');
 }
 
-export async function writeSnapshot(snapshot: SnapshotInput): Promise<void> {
+/**
+ * Persist the snapshot. `filePath` defaults to the production location; tests pass their
+ * own (a temp dir) so they never touch the user's real snapshot — mirroring readSnapshot.
+ */
+export async function writeSnapshot(snapshot: SnapshotInput, filePath: string = getSnapshotPath()): Promise<void> {
   // peak and context are volatile: the first goes stale within minutes, the second
   // recomputes from the parse cache instantly — neither belongs in the snapshot. Stripped
   // here, at the format owner, so no caller can persist them by accident.
-  const { peak, context, ...usage } = snapshot.usage;
-  void peak; void context;
+  const usage = { ...snapshot.usage };
+  delete usage.peak;
+  delete usage.context;
   const file: SnapshotFile = {
     version: SNAPSHOT_VERSION,
     savedAt: new Date().toISOString(),
@@ -48,7 +53,7 @@ export async function writeSnapshot(snapshot: SnapshotInput): Promise<void> {
     heatmap: snapshot.heatmap,
   };
   try {
-    await atomicWriteJson(getSnapshotPath(), file, 0o600);
+    await atomicWriteJson(filePath, file, 0o600);
   } catch {
     // ignore write failures (e.g. read-only FS)
   }
@@ -89,8 +94,20 @@ export async function readSnapshot(filePath: string = getSnapshotPath()): Promis
       localCredits7d: file.usage.localCredits7d ?? 0,
       lastUpdated: reviveDate(file.usage.lastUpdated) ?? new Date(0),
     };
+    // The volatile fields never persist (writeSnapshot strips them); drop them on read
+    // too, so a file written before the strip landed cannot resurrect a stale peak/context.
+    delete usage.peak;
+    delete usage.context;
     const projectCosts = Array.isArray(file.projectCosts)
-      ? file.projectCosts.map((p) => ({ ...p, lastActive: reviveDate(p.lastActive) ?? new Date(0) }))
+      ? file.projectCosts.map((p) => ({
+          ...p,
+          // Credit columns added after the first release default to 0 — same gap-between-
+          // versions protection as localCredits* above (undefined would reach formatCredits).
+          creditsToday: p.creditsToday ?? 0,
+          credits7d: p.credits7d ?? 0,
+          credits30d: p.credits30d ?? 0,
+          lastActive: reviveDate(p.lastActive) ?? new Date(0),
+        }))
       : [];
     const heatmap = file.heatmap
       ? { ...file.heatmap, generatedAt: reviveDate(file.heatmap.generatedAt) ?? new Date(0) }
