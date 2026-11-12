@@ -206,6 +206,8 @@ Claude Code Usage
 5h window:   78% [XXXXXX..] resets in 2h 47m
 7d window:   84% [XXXXXXX.] resets in 4d 8h
 
+Context: 41%                ← mirrors the ctx segment (hidden without a fresh session)
+
 Token Cost (local)
 ─────────────────────────────
 5h:   in:38.5K out:127.8K  $14.21

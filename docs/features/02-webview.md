@@ -217,7 +217,7 @@ The first card renders the quota windows plus, when their data is present:
 | Row | Shown when | Content |
 |-----|------------|---------|
 | Window labels | rate data on screen | `78% — resets in 2h 47m (at 14:23)` — the relative duration from `resetIn5h` plus the absolute clock of the reset (`now + resetIn5h`, local time; `reset5hAt` itself is not carried on the wire) |
-| `⚡ Peak until 13:00` | `peak && peak.active` (z-ai inside the window) | the local end of the peak window; claude-ai gets no `peak` object at all |
+| `⚡ Peak until 13:00` | `peak && peak.active` (z-ai inside the window) | the local end of the peak window; claude-ai gets `peak: null` — every non-z-ai provider does |
 | `Burn rate` | a positive speed | `412 cr/hr · $1.42/hr` for z-ai — primary unit first, the second one alongside; claude-ai shows dollars only |
 | `local §2.8k · quota §3.1k over 5h` | `reconcile` present | local § counted over the quota window (`reset5hAt − 5h` → now, **not** the rolling five hours) against `credits5h.used` — a systematic gap means the local credit multipliers drift from the tariff |
 

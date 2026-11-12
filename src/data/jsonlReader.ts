@@ -12,8 +12,8 @@ import {
   loadEntries,
   getClaudeProjectsDir,
   isSafePath,
-  UsageEntry,
 } from './entryCache';
+import type { UsageEntry } from './entryCache';
 import { creditsForEntry } from './credits';
 import { isPeakAt } from './peakHours';
 
