@@ -35,7 +35,7 @@ suite('snapshotCache', () => {
     const snap: SnapshotInput = {
       usage: makeUsage(),
       projectCosts: [{
-        projectName: 'demo', projectPath: '/tmp/demo', costToday: 1, cost7d: 2, cost30d: 3,
+        projectName: 'demo', projectPath: path.join(tmpDir, 'demo'), costToday: 1, cost7d: 2, cost30d: 3,
         creditsToday: 0.5, credits7d: 1.5, credits30d: 2.5,
         sessionCount: 4, lastActive: new Date('2026-01-02T00:00:00.000Z'),
       }],
@@ -45,12 +45,12 @@ suite('snapshotCache', () => {
 
     const back = await readSnapshot(snapshotPath);
     assert.ok(back, 'snapshot should read back');
-    assert.strictEqual(back!.usage.cost5h, 1.23);
-    assert.ok(back!.usage.lastUpdated instanceof Date, 'lastUpdated revived to Date');
-    assert.strictEqual(back!.usage.lastUpdated.toISOString(), '2026-01-01T00:00:00.000Z');
-    assert.strictEqual(back!.projectCosts.length, 1);
-    assert.ok(back!.projectCosts[0].lastActive instanceof Date);
-    assert.ok(back!.heatmap && back!.heatmap.generatedAt instanceof Date);
+    assert.strictEqual(back.usage.cost5h, 1.23);
+    assert.ok(back.usage.lastUpdated instanceof Date, 'lastUpdated revived to Date');
+    assert.strictEqual(back.usage.lastUpdated.toISOString(), '2026-01-01T00:00:00.000Z');
+    assert.strictEqual(back.projectCosts.length, 1);
+    assert.ok(back.projectCosts[0].lastActive instanceof Date);
+    assert.ok(back.heatmap && back.heatmap.generatedAt instanceof Date);
   });
 
   test('returns null for an invalid snapshot file', async () => {
@@ -91,7 +91,7 @@ suite('snapshotCache', () => {
       savedAt: new Date().toISOString(),
       usage: makeUsage(),
       projectCosts: [{
-        projectName: 'demo', projectPath: '/tmp/demo', costToday: 1, cost7d: 2, cost30d: 3,
+        projectName: 'demo', projectPath: path.join(tmpDir, 'demo'), costToday: 1, cost7d: 2, cost30d: 3,
         sessionCount: 1, lastActive: '2026-01-02T00:00:00.000Z',
       }],
       heatmap: null,
@@ -141,5 +141,29 @@ suite('snapshotCache', () => {
     assert.ok(back, 'the file is otherwise valid');
     assert.strictEqual(back.usage.peak, undefined, 'a stale peak never reaches consumers');
     assert.strictEqual(back.usage.context, undefined, 'a stale context never reaches consumers');
+  });
+
+  test('the default path resolves through os.homedir() — a redirected home round-trips', async () => {
+    // The no-argument filePath must build on os.homedir()/.claude: with the home env
+    // pointed at an empty temp dir the default read is null (also covers a home without
+    // .claude), then a default-path write lands exactly in <home>/.claude and reads back
+    // — never touching the real ~/.claude the user's running extension owns.
+    const homeVar = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+    const prevHome = process.env[homeVar];
+    const home = path.join(tmpDir, 'redirected-home');
+    const defaultPath = path.join(home, '.claude', 'vscode-claude-status-snapshot.json');
+    try {
+      process.env[homeVar] = home;
+      assert.strictEqual(await readSnapshot(), null, 'no snapshot in an empty redirected home');
+      await fsp.mkdir(path.dirname(defaultPath), { recursive: true });
+      await writeSnapshot({ usage: makeUsage(), projectCosts: [], heatmap: null });
+      await fsp.access(defaultPath);   // the default write landed in <home>/.claude
+      const back = await readSnapshot();
+      assert.ok(back, 'the default-path snapshot reads back');
+      assert.strictEqual(back.usage.cost5h, 1.23);
+    } finally {
+      if (prevHome === undefined) { delete process.env[homeVar]; } else { process.env[homeVar] = prevHome; }
+      await fsp.rm(home, { recursive: true, force: true });
+    }
   });
 });

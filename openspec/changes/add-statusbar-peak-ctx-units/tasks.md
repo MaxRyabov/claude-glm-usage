@@ -2,7 +2,7 @@
 
 ## 1. Чистые модули данных
 
-> Слито: PR #17. Модули `credits.ts`, `peakHours.ts`, субагентский обход и
+> Слито: PR #17 (merge 091fc53 в feat/statusbar-peak-ctx-units, 10.11.2026). Модули `credits.ts`, `peakHours.ts`, субагентский обход и
 > `MODEL_PRICING` glm-5.3/flash; тесты `credits.test.ts`, `peakHours.test.ts`,
 > `entryCache.test.ts` в комплекте.
 

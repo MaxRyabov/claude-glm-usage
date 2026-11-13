@@ -15,13 +15,13 @@ suite('isPeakAt (UTC weekdays 06:00–10:00)', () => {
   test('boundaries: 06:00 in, 10:00 out', () => {
     assert.strictEqual(isPeakAt(MON(5, 59).getTime()), false);
     assert.strictEqual(isPeakAt(MON(6, 0).getTime()), true);
-    assert.strictEqual(isPeakAt(new Date(Date.UTC(2026, 10, 9, 9, 59, 59, 999)).getTime()), true);
+    assert.strictEqual(isPeakAt(Date.UTC(2026, 10, 9, 9, 59, 59, 999)), true);
     assert.strictEqual(isPeakAt(MON(10, 0).getTime()), false);
   });
 
   test('weekend never peaks', () => {
     assert.strictEqual(isPeakAt(SAT_07.getTime()), false);
-    assert.strictEqual(isPeakAt(new Date(Date.UTC(2026, 10, 15, 7)).getTime()), false);   // Sunday
+    assert.strictEqual(isPeakAt(Date.UTC(2026, 10, 15, 7)), false);   // Sunday
   });
 });
 
