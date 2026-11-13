@@ -5,10 +5,23 @@ import { isPeakAt, peakStatus } from '../../data/peakHours';
 // Date.UTC months are 0-based — name them instead of repeating bare indices.
 const OCT = 9;
 const NOV = 10;
-const MON = (h: number, m = 0): Date => new Date(Date.UTC(2026, NOV, 9, h, m));
-const TUE_11 = new Date(Date.UTC(2026, NOV, 10, 11));
-const FRI_11 = new Date(Date.UTC(2026, NOV, 13, 11));
-const SAT_07 = new Date(Date.UTC(2026, NOV, 14, 7));
+// Full-precision UTC timestamp (named months, explicit seconds/ms) — the shared shape
+// for every fixed date below, so boundary cases don't hand-roll their own Date.UTC.
+const utc = (month: number, day: number, h: number, m = 0, s = 0, ms = 0): number =>
+  Date.UTC(2026, month, day, h, m, s, ms);
+const MON = (h: number, m = 0): Date => new Date(utc(NOV, 9, h, m));
+const TUE_11 = new Date(utc(NOV, 10, 11));
+const FRI_11 = new Date(utc(NOV, 13, 11));
+const SAT_07 = new Date(utc(NOV, 14, 7));
+
+// Independent default-zone (machine) formatters — deliberately no shared code with
+// peakStatus: they pin that an omitted/invalid timeZone selects the machine zone, not
+// a hardcoded UTC (the two differ on any non-UTC host and coincide on a UTC one).
+const machineHhMm = (ms: number): string =>
+  new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+const machineTzLabel = (ms: number): string =>
+  (new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' }).formatToParts(new Date(ms))
+    .find((p) => p.type === 'timeZoneName')?.value ?? '').replace(/^GMT/, 'UTC');
 
 suite('isPeakAt (UTC weekdays 06:00–10:00)', () => {
   test('weekday inside the window is peak', () => {
@@ -18,13 +31,13 @@ suite('isPeakAt (UTC weekdays 06:00–10:00)', () => {
   test('boundaries: 06:00 in, 10:00 out', () => {
     assert.strictEqual(isPeakAt(MON(5, 59).getTime()), false);
     assert.strictEqual(isPeakAt(MON(6, 0).getTime()), true);
-    assert.strictEqual(isPeakAt(Date.UTC(2026, NOV, 9, 9, 59, 59, 999)), true);
+    assert.strictEqual(isPeakAt(utc(NOV, 9, 9, 59, 59, 999)), true);
     assert.strictEqual(isPeakAt(MON(10, 0).getTime()), false);
   });
 
   test('weekend never peaks', () => {
     assert.strictEqual(isPeakAt(SAT_07.getTime()), false);
-    assert.strictEqual(isPeakAt(Date.UTC(2026, NOV, 15, 7)), false);   // Sunday
+    assert.strictEqual(isPeakAt(utc(NOV, 15, 7)), false);   // Sunday
   });
 });
 
@@ -34,10 +47,12 @@ suite('peakStatus', () => {
     assert.strictEqual(peakStatus(MON(7), 'unknown'), null);
   });
 
-  test('active window: local labels via Intl (Europe/Moscow = UTC+3 in November)', () => {
+  test('active window: absolute bounds and local labels via Intl (Europe/Moscow = UTC+3 in November)', () => {
     const st = peakStatus(MON(7), 'z-ai', 'Europe/Moscow');
     assert.ok(st);
     assert.strictEqual(st.active, true);
+    assert.strictEqual(st.windowStartMs, utc(NOV, 9, 6));
+    assert.strictEqual(st.windowEndMs, utc(NOV, 9, 10), 'end = start + 4h');
     assert.strictEqual(st.windowStartLocal, '09:00');   // 06:00 UTC
     assert.strictEqual(st.windowEndLocal, '13:00');     // 10:00 UTC
     assert.strictEqual(st.tzLabel, 'UTC+3');
@@ -116,9 +131,16 @@ suite('peakStatus', () => {
     assert.strictEqual(st.windowEndMs, Date.UTC(2026, NOV, 16, 10), 'end = start + 4h');
   });
 
-  test('default (machine) timezone still yields HH:MM labels and a UTC± label', () => {
+  test('default (machine) timezone: labels equal an independent machine-zone formatting', () => {
     const st = peakStatus(MON(7), 'z-ai');
     assert.ok(st);
+    // The expectation comes from a separate default-zone formatter over the same window
+    // moments: this pins "omitted timeZone → machine zone", not just the label shape.
+    // A regression hardcoding UTC (or losing the offset) fails on any non-UTC host; on
+    // a UTC host both coincide and only the format guards below apply.
+    assert.strictEqual(st.windowStartLocal, machineHhMm(st.windowStartMs));
+    assert.strictEqual(st.windowEndLocal, machineHhMm(st.windowEndMs));
+    assert.strictEqual(st.tzLabel, machineTzLabel(st.windowStartMs));
     assert.match(st.windowStartLocal, /^\d{2}:\d{2}$/);
     // On a UTC machine shortOffset is just "UTC" (no ±N suffix); half-hour zones give
     // "UTC+5:30" — all valid.
@@ -127,11 +149,14 @@ suite('peakStatus', () => {
 
   test('an invalid user-supplied timezone falls back to the machine zone, never throws', () => {
     // A direct call already fails the test on a throw. Equality with the no-timezone
-    // call is the actual fallback pin: format-only assertions would also pass if the
-    // invalid zone were silently replaced with UTC.
+    // call pins the fallback target, and the independent machine-zone expectation below
+    // rules out the "both calls quietly fell back to hardcoded UTC" pass that an
+    // equality-only check allows (the two differ on any non-UTC host).
     const st = peakStatus(MON(7), 'z-ai', 'Mars/Olympus_Mons');
     assert.ok(st);
     assert.deepStrictEqual(st, peakStatus(MON(7), 'z-ai'), 'invalid tz result equals the machine-zone result');
+    assert.strictEqual(st.windowStartLocal, machineHhMm(st.windowStartMs));
+    assert.strictEqual(st.tzLabel, machineTzLabel(st.windowStartMs));
     assert.match(st.tzLabel, /^UTC([+-]\d+(:\d{2})?)?$/);
   });
 });

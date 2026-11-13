@@ -7,7 +7,14 @@ import fsModule = require('fs/promises');
 import * as os from 'os';
 import osModule = require('os');
 import * as path from 'path';
-import { loadEntries, discoverFiles, findActiveSession, getClaudeProjectsDir, __resetEntryCacheForTests } from '../../data/entryCache';
+import {
+  loadEntries, discoverFiles, findActiveSession, getClaudeProjectsDir, isSafePath,
+  loadPersistedCache, persistCache, __resetEntryCacheForTests,
+} from '../../data/entryCache';
+// Same direct-module pattern as fsModule/osModule: counting atomicWriteJson calls pins
+// whether persistCache re-serializes, which the written content alone cannot show
+// (a pointless rewrite produces identical bytes).
+import atomicModule = require('../../data/atomicWrite');
 
 const usage = { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 const line = (rid: string, opts: { model?: string; ts?: string } = {}): string => JSON.stringify({
@@ -105,6 +112,52 @@ suite('EntryCache', () => {
     const entries = await loadEntries([file]);   // must NOT hit the unchanged-file cache
     assert.strictEqual(entries.length, 2, 'the unread tail is retried after a transient read failure');
   });
+
+  test('a transient tail-read failure leaves the cache clean — no pointless rewrite', async () => {
+    // Regression: dirty=true used to be set even when the incremental read threw, so a
+    // repeatedly-failing file (e.g. locked by antivirus) re-serialized the multi-MB
+    // persisted cache on every refresh tick for nothing.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'entrycache-dirty-'));
+    const realHomedir = osModule.homedir;
+    osModule.homedir = () => home;
+    const realWrite = atomicModule.atomicWriteJson;
+    let writes = 0;
+    atomicModule.atomicWriteJson = async (...args: Parameters<typeof realWrite>): Promise<void> => {
+      writes++;
+      return realWrite(...args);
+    };
+    try {
+      await fs.mkdir(path.join(home, '.claude'), { recursive: true });
+      await fs.writeFile(file, line('r1') + '\n');
+      await loadEntries([file]);
+      await persistCache(24 * HOUR);
+      assert.strictEqual(writes, 1, 'first persist writes once');
+
+      await fs.appendFile(file, line('r2') + '\n');
+      const realOpen = fsModule.open;
+      let failNextOpen = true;
+      fsModule.open = async (...args: Parameters<typeof fsModule.open>) => {
+        if (failNextOpen) { failNextOpen = false; throw new Error('EACCES: simulated transient failure'); }
+        return realOpen(...args);
+      };
+      try {
+        await loadEntries([file]);   // incremental read throws — nothing changed
+      } finally {
+        fsModule.open = realOpen;
+      }
+      await persistCache(24 * HOUR);
+      assert.strictEqual(writes, 1, 'failed read must not re-serialize the cache');
+
+      const entries = await loadEntries([file]);   // retry succeeds
+      assert.strictEqual(entries.length, 2);
+      await persistCache(24 * HOUR);
+      assert.strictEqual(writes, 2, 'a successful retry persists exactly once more');
+    } finally {
+      atomicModule.atomicWriteJson = realWrite;
+      osModule.homedir = realHomedir;
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
 });
 
 suite('EntryCache discovery', () => {
@@ -194,6 +247,106 @@ suite('EntryCache discovery', () => {
       await fs.rm(realHome, { recursive: true, force: true });
       await fs.rm(linkHome, { recursive: true, force: true });
     }
+  });
+
+  test('an allowedRoot failure is not cached — a projects dir appearing later behind a link still passes', async function () {
+    // Regression: the first isSafePath call while ~/.claude/projects does not exist used
+    // to pin the LEXICAL root for the whole session; with a linked $HOME every later
+    // realpath'd file then failed the containment check until the extension host
+    // restarted. Junctions (unlike symlinks) need no privileges on Windows.
+    const realHome = await fs.mkdtemp(path.join(os.tmpdir(), 'entrycache-realhome2-'));
+    const linkHome = path.join(os.tmpdir(), `entrycache-linkhome2-${Date.now()}-${process.pid}`);
+    try {
+      await fs.symlink(realHome, linkHome, 'junction');
+    } catch {
+      await fs.rm(realHome, { recursive: true, force: true });
+      this.skip();
+      return;
+    }
+    const realHomedir = osModule.homedir;
+    osModule.homedir = () => linkHome;
+    try {
+      // Phase 1: the projects dir does not exist yet — realpath throws, the lexical
+      // fallback answers this call (and must not be remembered as the root).
+      assert.strictEqual(isSafePath(path.join(linkHome, '.claude', 'projects', 'f.jsonl')), true);
+      // Phase 2: the dir appears behind the link — a freshly realpath'd file must pass.
+      const projectsReal = path.join(realHome, '.claude', 'projects');
+      await fs.mkdir(projectsReal, { recursive: true });
+      await fs.writeFile(path.join(projectsReal, 'f.jsonl'), line('r1') + '\n');
+      const realFile = await fs.realpath(path.join(linkHome, '.claude', 'projects', 'f.jsonl'));
+      assert.strictEqual(
+        isSafePath(realFile),
+        true,
+        'a realpath’d file passes once the linked projects dir exists',
+      );
+    } finally {
+      osModule.homedir = realHomedir;
+      await fs.rm(realHome, { recursive: true, force: true });
+      await fs.rm(linkHome, { recursive: true, force: true });   // the junction, never its target
+    }
+  });
+});
+
+suite('EntryCache persisted cache', () => {
+  let home: string;
+  let realHomedir: () => string;
+
+  setup(async () => {
+    __resetEntryCacheForTests();
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'entrycache-persist-'));
+    realHomedir = osModule.homedir;
+    osModule.homedir = () => home;
+    await fs.mkdir(path.join(home, '.claude'), { recursive: true });
+  });
+  teardown(async () => {
+    osModule.homedir = realHomedir;
+    try { await fs.rm(home, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test('an appended older turn does not shadow a newer persisted entry (last backfill)', async () => {
+    // Regression: a persisted record predating the `last` field has last === undefined;
+    // the first incremental parse used to scan only the appended range and lock in its
+    // (possibly older — resumed sessions are not chronological) entry, so the newer
+    // pre-existing entry could never win again in findActiveSession.
+    const proj = path.join(home, '.claude', 'projects', 'p1');
+    const file = path.join(proj, 's.jsonl');
+    await fs.mkdir(proj, { recursive: true });
+    const freshMs = Date.now() - HOUR;
+    const staleMs = Date.now() - 3 * HOUR;
+    const freshLine = line('r-fresh', { ts: new Date(freshMs).toISOString() });
+    await fs.writeFile(file, freshLine + '\n');
+    const prefixBytes = Buffer.byteLength(freshLine + '\n');
+    await fs.appendFile(file, line('r-stale', { ts: new Date(staleMs).toISOString() }) + '\n');
+
+    // Pre-`last`-era cache: knows the fresh prefix (offset/size/ids), no `last` field.
+    // Keyed by the canonical (realpath'd) form — the same form the walk caches files
+    // under, so the record is actually HIT (a lexical short-name key would miss and
+    // silently re-parse the file from scratch, hiding the code path under test).
+    const canonicalFile = await fs.realpath(file);
+    await fs.writeFile(
+      path.join(home, '.claude', 'vscode-claude-status-parsecache.json'),
+      JSON.stringify({
+        version: 1,
+        files: {
+          [canonicalFile]: {
+            mtimeMs: 1,
+            size: prefixBytes,
+            offset: prefixBytes,
+            entries: [{ timestamp: freshMs, model: 'claude-sonnet-4-6', usage }],
+            ids: ['r-fresh'],
+          },
+        },
+      }),
+    );
+    await loadPersistedCache();
+
+    const active = await findActiveSession(proj, 6 * HOUR);
+    assert.ok(active, 'fresh pre-existing turn is found');
+    assert.strictEqual(
+      active.timestamp,
+      freshMs,
+      'the appended older turn must not shadow the newer persisted entry',
+    );
   });
 });
 
@@ -474,5 +627,54 @@ suite('EntryCache subagents walk', () => {
     const all = await discoverFiles();
     assert.ok(!byReal(all, dangling), 'dangling symlink must not enter the file list');
     assert.ok(byReal(all, path.join(projDir, 's.jsonl')), 'real session file still discovered');
+  });
+
+  test('the walk result is sorted, not readdir/parallel-completion order', async () => {
+    // 'Z' (0x5A) sorts before 'a' (0x61) by code point, while NTFS lists them
+    // case-insensitively (a before Z): pinning the code-point order proves the explicit
+    // sort — not the platform's directory order or task completion order — shapes it.
+    await fs.writeFile(path.join(projDir, 'a.jsonl'), line('r1') + '\n');
+    await fs.writeFile(path.join(projDir, 'Z.jsonl'), line('r2') + '\n');
+    const realProj = await fs.realpath(projDir);
+    const mine = (await discoverFiles()).filter((p) => p.startsWith(realProj + path.sep));
+    assert.deepStrictEqual(mine, [path.join(realProj, 'Z.jsonl'), path.join(realProj, 'a.jsonl')]);
+  });
+
+  test('a symlinked subagent log resolving inside the root joins the walk (parity with top-level)', async function () {
+    // The target sits one level deeper than the walk ever goes, so the symlink is the
+    // only route to it: the test fails while subagents/ filters links via isFile()
+    // (lstat-based, false for symlinks) although top-level symlinks count.
+    const deepDir = path.join(path.dirname(subDir), 'deep');
+    await fs.mkdir(deepDir, { recursive: true });
+    const deep = path.join(deepDir, 'deep.jsonl');
+    await fs.writeFile(deep, line('r-deep') + '\n');
+    try {
+      await fs.symlink(deep, path.join(subDir, 'link.jsonl'), 'file');
+    } catch {
+      this.skip();   // symlink privileges absent
+      return;
+    }
+    const all = await discoverFiles();
+    assert.ok(byReal(all, deep), 'a symlinked subagent log resolving inside the root is counted');
+  });
+
+  test('two lexical paths to one log (top-level file + symlink alias) are counted once', async function () {
+    // Regression: without realpath dedup a top-level session file and a subagents/
+    // symlink to it both entered the list, double-counting every entry in the sums.
+    const session = path.join(projDir, '22222222-3333-4444-5555-666666666666.jsonl');
+    await fs.writeFile(session, line('r-top') + '\n');
+    try {
+      await fs.symlink(session, path.join(subDir, 'alias.jsonl'), 'file');
+    } catch {
+      this.skip();   // symlink privileges absent
+      return;
+    }
+    const all = await discoverFiles();
+    const realSession = await fs.realpath(session);
+    assert.strictEqual(
+      all.filter((p) => p === realSession).length,
+      1,
+      'the realpath appears exactly once — symlink aliases are not double-counted',
+    );
   });
 });

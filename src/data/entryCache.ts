@@ -18,15 +18,32 @@ let allowedRootCache: string | undefined;
 function allowedRoot(): string {
   if (allowedRootCache === undefined) {
     const lexical = path.resolve(getClaudeProjectsDir());
-    try { allowedRootCache = realpathSync(lexical); } catch { allowedRootCache = lexical; }
+    try {
+      // .native (uv_fs_realpath) canonicalizes 8.3 short-name segments to their long
+      // form — the same canonicalization fs.realpath (used for the file paths below)
+      // applies. The JS realpathSync keeps short segments as-is, so mixing the two
+      // would make the containment check drop every file on a short-name $HOME path.
+      allowedRootCache = realpathSync.native(lexical);
+    } catch {
+      // Root not there yet (fresh install, transient unavailability): use the lexical
+      // path for THIS call without caching it. Caching the failure would pin the lexical
+      // root for the whole session, and once the directory appears behind a symlinked
+      // $HOME every later realpath'd file would fail the containment check until the
+      // extension host restarts. The retry is free while the root is missing — the walk
+      // and findActiveSession return before there is anything to gate.
+      return lexical;
+    }
   }
   return allowedRootCache;
 }
 
 /**
- * Confirm a path stays inside ~/.claude/projects/ (M-3). Defends against path traversal
- * (e.g. a symlink resolving elsewhere) so JSONL discovery never reads files outside the
- * projects directory.
+ * Lexical containment gate for ~/.claude/projects/ (M-3): true when `filePath` stays
+ * inside the projects root after `path.resolve` — and nothing more. It does NOT resolve
+ * symlinks: a lexical `<root>/link.jsonl → /etc/passwd` passes this check. Symlink
+ * safety is the caller's precondition — resolve the path with `fs.realpath` first and
+ * fail closed on throw, exactly the way pushSafeFile and findActiveSession do. A caller
+ * feeding raw, non-realpath'd input gets no protection here.
  */
 export function isSafePath(filePath: string): boolean {
   const resolved = path.resolve(filePath);
@@ -184,14 +201,20 @@ async function readSlice(filePath: string, offset: number, length: number): Prom
 /** Track the newest non-synthetic entry appended at [fromIdx, entries.length). */
 function refreshLast(rec: FileCacheEntry, fromIdx: number): void {
   // Lines are chronological within a file, so >= keeps the later of equal timestamps.
-  // Never writes the null sentinel: an empty range (no new lines survived dedupe) says
-  // nothing about the pre-existing entries — only a full scan (lastNonSynthetic) may
-  // conclude "nothing non-synthetic" for a record loaded from a pre-`last` cache.
-  for (let i = fromIdx; i < rec.entries.length; i++) {
+  // A record loaded from a pre-`last` persisted cache (last === undefined) is backfilled
+  // from the very start: files are not strictly chronological (resumed sessions), so the
+  // appended range alone could lock in an entry older than a pre-existing one and
+  // shadow it in lastNonSynthetic forever.
+  const start = rec.last === undefined ? 0 : fromIdx;
+  for (let i = start; i < rec.entries.length; i++) {
     const e = rec.entries[i];
     if (e.model === '<synthetic>') { continue; }
     if (!rec.last || e.timestamp >= rec.last.timestamp) { rec.last = { ...e }; }
   }
+  // Only a scan of the FULL entry list may conclude "nothing non-synthetic" (the null
+  // sentinel): an incremental range says nothing about the entries before it, and
+  // neither does an empty one (no new lines survived dedupe).
+  if (rec.last === undefined && start === 0) { rec.last = null; }
 }
 
 async function parseFull(filePath: string, mtimeMs: number, size: number): Promise<FileCacheEntry> {
@@ -227,10 +250,14 @@ async function parseIncremental(
     cached.mtimeMs = mtimeMs;
     cached.size = size;
   } catch {
-    // read failed — keep prior entries AND the prior stat so the tail is retried next tick
+    // Read failed — keep the prior entries AND the prior stat so the tail is retried
+    // next tick. Nothing changed, so dirty must stay false: a transient failure (e.g. a
+    // file locked by antivirus) repeating every tick would otherwise re-serialize and
+    // rewrite the multi-MB persisted cache for nothing on each cycle.
+    return cached;
   }
   refreshLast(cached, before);
-  dirty = true;
+  dirty = true;   // the offset/stat advanced — the persisted cache is now stale
   return cached;
 }
 
@@ -353,11 +380,18 @@ async function collectSessionSigs(dirs: { p: string; m: number }[]): Promise<Ses
   return sigs;
 }
 
-/** realpath + isSafePath gate shared by top-level and subagent files (M-3, fail closed). */
-async function pushSafeFile(files: string[], filePath: string): Promise<void> {
+/**
+ * realpath + isSafePath gate shared by top-level and subagent files (M-3, fail closed).
+ * `seen` dedups realpath aliases: a symlink and its target (or two links to one log)
+ * must contribute their entries once, not once per lexical path.
+ */
+async function pushSafeFile(files: string[], filePath: string, seen: Set<string>): Promise<void> {
   let realPath: string;
   try { realPath = await fs.realpath(filePath); } catch { return; }   // vanished or unreadable → drop
-  if (isSafePath(realPath)) { files.push(realPath); }
+  if (isSafePath(realPath) && !seen.has(realPath)) {
+    seen.add(realPath);
+    files.push(realPath);
+  }
 }
 
 async function walkAll(): Promise<string[]> {
@@ -391,28 +425,36 @@ async function walkAll(): Promise<string[]> {
   }
 
   const files: string[] = [];
+  const seen = new Set<string>();
   await Promise.all(dirs.map(async (dir) => {
     let entries: Dirent[];
     try { entries = await fs.readdir(dir.p, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       if (entry.isDirectory()) {
         // Subagent logs: <session>/subagents/*.jsonl — one fixed level, no full recursion.
-        // isFile() keeps a *directory* named like *.jsonl out of the list, same as the
-        // top-level branch keeps directories out via isDirectory()-first.
+        // Not isFile() — the same guard shape as the top-level branch below and
+        // findActiveSession: isFile() is lstat-based and false for a *symlinked* subagent
+        // log, which would silently drop it from the aggregates while top-level symlinks
+        // count. Directories stay out via !isDirectory(); symlinks resolve (and get
+        // gated) in pushSafeFile, like everywhere else.
         const subDir = path.join(dir.p, entry.name, 'subagents');
         let subEntries: Dirent[];
         try { subEntries = await fs.readdir(subDir, { withFileTypes: true }); } catch { continue; }
         for (const se of subEntries) {
-          if (se.isFile() && se.name.endsWith('.jsonl')) { await pushSafeFile(files, path.join(subDir, se.name)); }
+          if (!se.isDirectory() && se.name.endsWith('.jsonl')) { await pushSafeFile(files, path.join(subDir, se.name), seen); }
         }
       } else if (entry.name.endsWith('.jsonl')) {
         // Top-level session file; the isDirectory() check above keeps a *directory*
         // named like *.jsonl out of the file list (readFile on it would fail anyway,
         // but it must not even reach the parse cache).
-        await pushSafeFile(files, path.join(dir.p, entry.name));
+        await pushSafeFile(files, path.join(dir.p, entry.name), seen);
       }
     }
   }));
+  // Parallel per-dir tasks complete out of order: sort so the walk result (and the
+  // persisted parse cache, keyed in discovery order) is a pure function of the file set
+  // — reproducible tests and stable cache diffs.
+  files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
   walkCache = { dirSig, files };
   return files;
@@ -481,7 +523,8 @@ export async function findActiveSession(
   // symlinked project dir, which makes every file resolve outside the root — must
   // never be read even though the project dir prefix itself looks lexical-safe.
   const files: string[] = [];
-  await Promise.all(jsonl.map((f) => pushSafeFile(files, f)));
+  const seen = new Set<string>();   // same realpath dedup as the walk (symlink aliases)
+  await Promise.all(jsonl.map((f) => pushSafeFile(files, f, seen)));
   if (files.length === 0) { return null; }
 
   await loadEntries(files);   // warm the parse cache (shared with all other consumers)
