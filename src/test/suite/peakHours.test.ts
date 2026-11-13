@@ -17,10 +17,12 @@ const SAT_07 = new Date(utc(NOV, 14, 7));
 // Independent default-zone (machine) formatters — deliberately no shared code with
 // peakStatus: they pin that an omitted/invalid timeZone selects the machine zone, not
 // a hardcoded UTC (the two differ on any non-UTC host and coincide on a UTC one).
-const machineHhMm = (ms: number): string =>
-  new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+// Both are zone-free (machine default), so the instances are invariant — build once.
+const machineHhMmFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const machineTzFmt = new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' });
+const machineHhMm = (ms: number): string => machineHhMmFmt.format(new Date(ms));
 const machineTzLabel = (ms: number): string =>
-  (new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' }).formatToParts(new Date(ms))
+  (machineTzFmt.formatToParts(new Date(ms))
     .find((p) => p.type === 'timeZoneName')?.value ?? '').replace(/^GMT/, 'UTC');
 
 suite('isPeakAt (UTC weekdays 06:00–10:00)', () => {
