@@ -349,7 +349,7 @@ async function collectSessionSigs(dirs: { p: string; m: number }[]): Promise<Ses
       } catch { /* session vanished between readdir and stat */ }
     }));
   }));
-  sigs.sort((a, b) => (a.p < b.p ? -1 : 1));
+  sigs.sort((a, b) => (a.p < b.p ? -1 : a.p > b.p ? 1 : 0));
   return sigs;
 }
 
@@ -379,7 +379,7 @@ async function walkAll(): Promise<string[]> {
   const dirs = dirStats.filter((d): d is { p: string; m: number } => d !== null);
   // readdir order is not guaranteed: sort so dirSig is stable across calls (a re-ordered
   // listing must not invalidate walkCache) — sessionSigs is sorted for the same reason.
-  dirs.sort((a, b) => (a.p < b.p ? -1 : 1));
+  dirs.sort((a, b) => (a.p < b.p ? -1 : a.p > b.p ? 1 : 0));
 
   // Signature changes when a session file is added/removed/renamed (dir mtime), the set
   // of project dirs changes, or anything moves inside a session subtree (session and

@@ -2,10 +2,13 @@ import * as assert from 'assert';
 import { isPeakAt, peakStatus } from '../../data/peakHours';
 
 // Fixed dates: 2026-11-09 is a Monday, 2026-11-14/15 — Saturday/Sunday.
-const MON = (h: number, m = 0): Date => new Date(Date.UTC(2026, 10, 9, h, m));
-const TUE_11 = new Date(Date.UTC(2026, 10, 10, 11));
-const FRI_11 = new Date(Date.UTC(2026, 10, 13, 11));
-const SAT_07 = new Date(Date.UTC(2026, 10, 14, 7));
+// Date.UTC months are 0-based — name them instead of repeating bare indices.
+const OCT = 9;
+const NOV = 10;
+const MON = (h: number, m = 0): Date => new Date(Date.UTC(2026, NOV, 9, h, m));
+const TUE_11 = new Date(Date.UTC(2026, NOV, 10, 11));
+const FRI_11 = new Date(Date.UTC(2026, NOV, 13, 11));
+const SAT_07 = new Date(Date.UTC(2026, NOV, 14, 7));
 
 suite('isPeakAt (UTC weekdays 06:00–10:00)', () => {
   test('weekday inside the window is peak', () => {
@@ -15,13 +18,13 @@ suite('isPeakAt (UTC weekdays 06:00–10:00)', () => {
   test('boundaries: 06:00 in, 10:00 out', () => {
     assert.strictEqual(isPeakAt(MON(5, 59).getTime()), false);
     assert.strictEqual(isPeakAt(MON(6, 0).getTime()), true);
-    assert.strictEqual(isPeakAt(Date.UTC(2026, 10, 9, 9, 59, 59, 999)), true);
+    assert.strictEqual(isPeakAt(Date.UTC(2026, NOV, 9, 9, 59, 59, 999)), true);
     assert.strictEqual(isPeakAt(MON(10, 0).getTime()), false);
   });
 
   test('weekend never peaks', () => {
     assert.strictEqual(isPeakAt(SAT_07.getTime()), false);
-    assert.strictEqual(isPeakAt(Date.UTC(2026, 10, 15, 7)), false);   // Sunday
+    assert.strictEqual(isPeakAt(Date.UTC(2026, NOV, 15, 7)), false);   // Sunday
   });
 });
 
@@ -73,15 +76,16 @@ suite('peakStatus', () => {
   test('DST transition: the offset is taken at the window moment, not at "now"', () => {
     // US clocks fall back on Sunday 2026-11-01. On Friday 30 Oct (still EDT, UTC−4)
     // the active window renders with the pre-transition offset…
-    const fri = peakStatus(new Date(Date.UTC(2026, 9, 30, 7)), 'z-ai', 'America/New_York');
+    const fri = peakStatus(new Date(Date.UTC(2026, OCT, 30, 7)), 'z-ai', 'America/New_York');
     assert.ok(fri);
     assert.strictEqual(fri.windowStartLocal, '02:00');
     assert.strictEqual(fri.tzLabel, 'UTC-4');
     // …while on Saturday 31 Oct (EDT) the *next* window already lies past the
     // transition and must use EST (UTC−5), proving the label follows the window.
-    const sat = peakStatus(new Date(Date.UTC(2026, 9, 31, 12)), 'z-ai', 'America/New_York');
+    const sat = peakStatus(new Date(Date.UTC(2026, OCT, 31, 12)), 'z-ai', 'America/New_York');
     assert.ok(sat);
-    assert.strictEqual(sat.windowStartMs, Date.UTC(2026, 10, 2, 6), 'next window is Monday 2 Nov');
+    assert.strictEqual(sat.active, false, 'Saturday afternoon is outside every window');
+    assert.strictEqual(sat.windowStartMs, Date.UTC(2026, NOV, 2, 6), 'next window is Monday 2 Nov');
     assert.strictEqual(sat.windowStartLocal, '01:00');
     assert.strictEqual(sat.windowEndLocal, '05:00');
     assert.strictEqual(sat.tzLabel, 'UTC-5');
@@ -91,8 +95,8 @@ suite('peakStatus', () => {
     const st = peakStatus(MON(4), 'z-ai', 'UTC');
     assert.ok(st);
     assert.strictEqual(st.active, false);
-    assert.strictEqual(st.windowStartMs, Date.UTC(2026, 10, 9, 6));
-    assert.strictEqual(st.windowEndMs, Date.UTC(2026, 10, 9, 10));
+    assert.strictEqual(st.windowStartMs, Date.UTC(2026, NOV, 9, 6));
+    assert.strictEqual(st.windowEndMs, Date.UTC(2026, NOV, 9, 10));
     assert.strictEqual(st.windowStartLocal, '06:00');
     assert.strictEqual(st.windowEndLocal, '10:00');
   });
@@ -101,15 +105,15 @@ suite('peakStatus', () => {
     const st = peakStatus(TUE_11, 'z-ai', 'UTC');
     assert.ok(st);
     assert.strictEqual(st.active, false);
-    assert.strictEqual(st.windowStartMs, Date.UTC(2026, 10, 11, 6));   // Wednesday
-    assert.strictEqual(st.windowEndMs, Date.UTC(2026, 10, 11, 10), 'end = start + 4h');
+    assert.strictEqual(st.windowStartMs, Date.UTC(2026, NOV, 11, 6));   // Wednesday
+    assert.strictEqual(st.windowEndMs, Date.UTC(2026, NOV, 11, 10), 'end = start + 4h');
   });
 
   test('Friday after the window rolls over the weekend to Monday', () => {
     const st = peakStatus(FRI_11, 'z-ai', 'UTC');
     assert.ok(st);
-    assert.strictEqual(st.windowStartMs, Date.UTC(2026, 10, 16, 6));   // next Monday
-    assert.strictEqual(st.windowEndMs, Date.UTC(2026, 10, 16, 10), 'end = start + 4h');
+    assert.strictEqual(st.windowStartMs, Date.UTC(2026, NOV, 16, 6));   // next Monday
+    assert.strictEqual(st.windowEndMs, Date.UTC(2026, NOV, 16, 10), 'end = start + 4h');
   });
 
   test('default (machine) timezone still yields HH:MM labels and a UTC± label', () => {
