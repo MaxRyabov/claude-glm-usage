@@ -95,6 +95,8 @@ suite('peakStatus', () => {
     // the active window renders with the pre-transition offset…
     const fri = peakStatus(new Date(utc(OCT, 30, 7)), 'z-ai', 'America/New_York');
     assert.ok(fri);
+    assert.strictEqual(fri.active, true, 'Friday 07:00 UTC is inside the window');
+    assert.strictEqual(fri.windowStartMs, utc(OCT, 30, 6), 'the active window is Friday 30 Oct 06:00 UTC');
     assert.strictEqual(fri.windowStartLocal, '02:00');
     assert.strictEqual(fri.tzLabel, 'UTC-4');
     // …while on Saturday 31 Oct (EDT) the *next* window already lies past the
