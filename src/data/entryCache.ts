@@ -1,5 +1,5 @@
 import * as fs from 'fs/promises';
-import type { Dirent } from 'fs';
+import { realpathSync, type Dirent } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { TokenUsage } from './pricing';
@@ -9,6 +9,20 @@ export function getClaudeProjectsDir(): string {
   return path.join(os.homedir(), '.claude', 'projects');
 }
 
+// Real (post-symlink) projects root, resolved once: callers hand isSafePath
+// realpath'd file paths, so the root must be realpath'd too — comparing against a
+// lexically resolved root would drop every file when the home/`.claude` chain itself
+// contains a symlink (e.g. $HOME → /mnt/data/home), silently stopping all data loads.
+let allowedRootCache: string | undefined;
+
+function allowedRoot(): string {
+  if (allowedRootCache === undefined) {
+    const lexical = path.resolve(getClaudeProjectsDir());
+    try { allowedRootCache = realpathSync(lexical); } catch { allowedRootCache = lexical; }
+  }
+  return allowedRootCache;
+}
+
 /**
  * Confirm a path stays inside ~/.claude/projects/ (M-3). Defends against path traversal
  * (e.g. a symlink resolving elsewhere) so JSONL discovery never reads files outside the
@@ -16,8 +30,7 @@ export function getClaudeProjectsDir(): string {
  */
 export function isSafePath(filePath: string): boolean {
   const resolved = path.resolve(filePath);
-  const allowedRoot = path.resolve(getClaudeProjectsDir());
-  return resolved.startsWith(allowedRoot + path.sep);
+  return resolved.startsWith(allowedRoot() + path.sep);
 }
 
 // A normalized, deduplicated assistant usage record — the single shape every data
@@ -208,12 +221,15 @@ async function parseIncremental(
   try {
     const chunk = await readSlice(filePath, cached.offset, size - cached.offset);
     cached.offset = await ingest(cached.offset, chunk, cached.seenIds, cached.entries);
+    // Advance the stat only on a successful read: if readSlice threw, the next doLoadOne
+    // must still see a size/mtime mismatch and retry the tail — recording the new size
+    // would make the unchanged-file check pass while the appended tail stays unread.
+    cached.mtimeMs = mtimeMs;
+    cached.size = size;
   } catch {
-    // read failed — keep prior entries, just refresh stat below
+    // read failed — keep prior entries AND the prior stat so the tail is retried next tick
   }
   refreshLast(cached, before);
-  cached.mtimeMs = mtimeMs;
-  cached.size = size;
   dirty = true;
   return cached;
 }
@@ -290,7 +306,10 @@ async function doLoadOne(filePath: string): Promise<UsageEntry[]> {
  */
 export async function discoverFiles(minMtimeMs?: number): Promise<string[]> {
   const all = await walkAll();
-  if (minMtimeMs === undefined) { return all; }
+  // Defensive copy on the unfiltered path: a caller sorting or clearing the array it got
+  // must not poison walkCache.files (the dirSig would not notice — same signature,
+  // mutated list — and the damage would outlive the caller).
+  if (minMtimeMs === undefined) { return all.slice(); }
 
   const stats = await Promise.all(all.map(async (p) => {
     try { return { p, m: (await fs.stat(p)).mtimeMs }; } catch { return null; }
@@ -441,13 +460,21 @@ export async function findActiveSession(
   freshnessMs: number = ACTIVE_SESSION_FRESHNESS_MS,
   now: number = Date.now(),
 ): Promise<ActiveSessionInfo | null> {
-  if (!isSafePath(path.join(projectDir, 'probe'))) { return null; }
+  // realpath before anything else: a symlinked project dir would pass the lexical probe
+  // check below and let readdir list a directory outside ~/.claude/projects. Only the
+  // listing could ever leak (pushSafeFile still keeps the file contents out), but even
+  // that must not happen. A missing dir rejects → null.
+  let realDir: string;
+  try { realDir = await fs.realpath(projectDir); } catch { return null; }
+  if (!isSafePath(path.join(realDir, 'probe'))) { return null; }
   let entries: Dirent[];
-  try { entries = await fs.readdir(projectDir, { withFileTypes: true }); } catch { return null; }
-  // isFile() keeps a *directory* named like *.jsonl out (same guard as the walk).
+  try { entries = await fs.readdir(realDir, { withFileTypes: true }); } catch { return null; }
+  // Not isDirectory() — the same guard shape as the walk: isFile() is false for a
+  // symlinked *.jsonl, so it would silently drop files the walk counts in the
+  // aggregates. Symlinks resolve (and get gated) in pushSafeFile, like everywhere else.
   const jsonl = entries
-    .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
-    .map((e) => path.join(projectDir, e.name));
+    .filter((e) => !e.isDirectory() && e.name.endsWith('.jsonl'))
+    .map((e) => path.join(realDir, e.name));
   if (jsonl.length === 0) { return null; }
 
   // Same realpath + isSafePath gate as the walk (M-3): a symlinked jsonl file — or a
@@ -556,6 +583,7 @@ export async function persistCache(maxAgeMs: number): Promise<void> {
 export function __resetEntryCacheForTests(): void {
   cache.clear();
   walkCache = null;
+  allowedRootCache = undefined;
   persistedLoaded = false;
   dirty = false;
 }

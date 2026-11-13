@@ -1,6 +1,11 @@
 import * as assert from 'assert';
 import * as fs from 'fs/promises';
+// Direct module objects (not the namespace wrappers TS emits for `import * as`): two
+// tests stub fs.open / os.homedir on the real module so entryCache — which calls them
+// through its own namespace imports — sees the stubs.
+import fsModule = require('fs/promises');
 import * as os from 'os';
+import osModule = require('os');
 import * as path from 'path';
 import { loadEntries, discoverFiles, findActiveSession, getClaudeProjectsDir, __resetEntryCacheForTests } from '../../data/entryCache';
 
@@ -77,6 +82,29 @@ suite('EntryCache', () => {
     await fs.unlink(file);
     assert.strictEqual((await loadEntries([file])).length, 0, 'missing file yields no entries');
   });
+
+  test('a failed tail read does not advance the cached stat — the tail is retried next tick', async () => {
+    await fs.writeFile(file, line('r1') + '\n');
+    await loadEntries([file]);
+    await fs.appendFile(file, line('r2') + '\n');
+
+    // Simulate one transient read failure: readSlice goes through fs.open. The stub is
+    // module-level (no sinon in this project), restored in the finally right below.
+    const realOpen = fsModule.open;
+    let failNextOpen = true;
+    fsModule.open = async (...args: Parameters<typeof fsModule.open>) => {
+      if (failNextOpen) { failNextOpen = false; throw new Error('EACCES: simulated transient failure'); }
+      return realOpen(...args);
+    };
+    try {
+      await loadEntries([file]);   // incremental read throws — the old size must be kept
+    } finally {
+      fsModule.open = realOpen;
+    }
+
+    const entries = await loadEntries([file]);   // must NOT hit the unchanged-file cache
+    assert.strictEqual(entries.length, 2, 'the unread tail is retried after a transient read failure');
+  });
 });
 
 suite('EntryCache discovery', () => {
@@ -114,6 +142,58 @@ suite('EntryCache discovery', () => {
     const recent = await discoverFiles(Date.now() - 30 * 60 * 1000);
     assert.ok(recent.some((p) => path.resolve(p) === path.resolve(b)), 'recent window keeps b.jsonl');
     assert.ok(!recent.some((p) => path.resolve(p) === path.resolve(a)), 'recent window drops the 2h-old a.jsonl');
+  });
+
+  test('returns a defensive copy — mutating the result never empties the cached walk', async function () {
+    this.timeout(20_000);
+    await fs.writeFile(path.join(projDir, 'a.jsonl'), line('r1') + '\n');
+    const first = await discoverFiles();
+    assert.ok(first.some((p) => path.resolve(p) === path.resolve(path.join(projDir, 'a.jsonl'))));
+    first.length = 0;   // a hostile caller destroys its own copy
+    const second = await discoverFiles();
+    assert.ok(second.length > 0, 'the cached walk survives the caller clearing its result');
+    assert.ok(
+      second.some((p) => path.resolve(p) === path.resolve(path.join(projDir, 'a.jsonl'))),
+      'the file is still discovered after the caller mutated the first result',
+    );
+  });
+
+  test('a symlinked projects root does not drop every file (root resolved via realpath)', async function () {
+    // HOME → temp home whose .claude/projects is a symlink to a real dir. isSafePath
+    // compares realpath'd file paths against the root, so the root must be realpath'd
+    // too — a lexically resolved root would drop every file under the symlink and
+    // silently stop all data loading.
+    const realHome = await fs.mkdtemp(path.join(os.tmpdir(), 'entrycache-realhome-'));
+    const linkHome = await fs.mkdtemp(path.join(os.tmpdir(), 'entrycache-linkhome-'));
+    const target = path.join(realHome, 'projects-real', 'p1', 'a.jsonl');
+    try {
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, line('r1') + '\n');
+      await fs.mkdir(path.join(linkHome, '.claude'), { recursive: true });
+      try {
+        await fs.symlink(path.join(realHome, 'projects-real'), path.join(linkHome, '.claude', 'projects'), 'dir');
+      } catch {
+        this.skip();   // symlink privileges absent
+        return;
+      }
+      const realHomedir = osModule.homedir;
+      osModule.homedir = () => linkHome;
+      try {
+        // Fail fast if the stub did not take: proceeding would discover against the
+        // real home instead of the temp one.
+        assert.notStrictEqual(osModule.homedir(), realHomedir(), 'os.homedir stub must be active before discovery');
+        const all = await discoverFiles();
+        assert.ok(
+          all.some((p) => path.resolve(p) === path.resolve(target)),
+          'files under a symlinked projects root are discovered',
+        );
+      } finally {
+        osModule.homedir = realHomedir;
+      }
+    } finally {
+      await fs.rm(realHome, { recursive: true, force: true });
+      await fs.rm(linkHome, { recursive: true, force: true });
+    }
   });
 });
 
@@ -228,6 +308,63 @@ suite('EntryCache findActiveSession', () => {
       assert.strictEqual(await findActiveSession(outside), null);
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('a symlinked jsonl in the project dir joins the active-session scan (parity with the walk)', async function () {
+    // The walk counts a symlinked session file in the aggregates (it resolves through
+    // pushSafeFile); the active-session scan must not silently drop it — isFile() is
+    // false for a symlink, so the filter has to mirror the walk's !isDirectory() shape.
+    const otherDir = path.join(projectsDir, `_entrycache-linktarget-${Date.now()}-${process.pid}`);
+    await fs.mkdir(otherDir, { recursive: true });
+    try {
+      const fresh = at(0.1);
+      const mine = at(1);
+      await fs.writeFile(path.join(otherDir, 'fresh.jsonl'), line('r-target', { ts: fresh.iso }) + '\n');
+      await fs.writeFile(path.join(projDir, 's.jsonl'), line('r-mine', { ts: mine.iso }) + '\n');
+      try {
+        await fs.symlink(path.join(otherDir, 'fresh.jsonl'), path.join(projDir, 'link.jsonl'), 'file');
+      } catch {
+        this.skip();   // symlink privileges absent
+        return;
+      }
+      const active = await findActiveSession(projDir);
+      assert.ok(active, 'a symlinked file resolving inside the root counts');
+      assert.strictEqual(active.timestamp, fresh.ms, 'the fresher symlinked turn wins, as in the walk');
+    } finally {
+      await fs.rm(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a symlinked project dir resolving outside the root is rejected before readdir', async function () {
+    // The lexical probe would pass (the link name lives under projects/), letting
+    // readdir list a foreign directory; worse, a *.jsonl symlink inside that directory
+    // pointing back into another project would import that project's fresh turn. The
+    // realpath gate stops both before any listing happens.
+    const victimDir = path.join(os.tmpdir(), `entrycache-victimdir-${Date.now()}-${process.pid}`);
+    const otherDir = path.join(projectsDir, `_entrycache-otherproj-${Date.now()}-${process.pid}`);
+    const linkedProj = path.join(projectsDir, `_entrycache-linkedproj-${Date.now()}-${process.pid}`);
+    await fs.mkdir(victimDir, { recursive: true });
+    await fs.mkdir(otherDir, { recursive: true });
+    try {
+      const fresh = at(0.1);
+      await fs.writeFile(path.join(otherDir, 'x.jsonl'), line('r-foreign', { ts: fresh.iso }) + '\n');
+      try {
+        await fs.symlink(path.join(otherDir, 'x.jsonl'), path.join(victimDir, 'fresh.jsonl'), 'file');
+        await fs.symlink(victimDir, linkedProj, 'dir');
+      } catch {
+        this.skip();   // symlink privileges absent
+        return;
+      }
+      assert.strictEqual(
+        await findActiveSession(linkedProj),
+        null,
+        'a project dir resolving outside ~/.claude/projects yields nothing',
+      );
+    } finally {
+      await fs.rm(victimDir, { recursive: true, force: true });
+      await fs.rm(otherDir, { recursive: true, force: true });
+      await fs.rm(linkedProj, { force: true });   // the link itself, never its target
     }
   });
 });

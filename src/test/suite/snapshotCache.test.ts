@@ -1,6 +1,10 @@
 import * as assert from 'assert';
 import * as fsp from 'fs/promises';
 import * as os from 'os';
+// Direct module object (not the namespace wrapper TS emits for `import * as`): the
+// default-path test stubs os.homedir on the real module so snapshotCache — which reads
+// os.homedir() at call time — sees the stub, without touching process.env.
+import osModule = require('os');
 import * as path from 'path';
 import { readSnapshot, writeSnapshot, SnapshotInput } from '../../data/snapshotCache';
 import type { ClaudeUsageData } from '../../data/dataManager';
@@ -28,10 +32,17 @@ suite('snapshotCache', () => {
     snapshotPath = path.join(tmpDir, 'vscode-claude-status-snapshot.json');
   });
   suiteTeardown(async () => {
-    await fsp.rm(tmpDir, { recursive: true, force: true });
+    // Guarded: if suiteSetup died before mkdtemp assigned tmpDir, an unguarded rm would
+    // throw a TypeError here and mask the original setup failure.
+    if (tmpDir) { await fsp.rm(tmpDir, { recursive: true, force: true }); }
   });
 
   test('round-trips a snapshot, reviving Date fields', async () => {
+    const heatmap = {
+      daily: [{ date: '2026-01-02', cost: 3.5, sessionCount: 6, tokensTotal: 12_000 }],
+      hourly: [{ hour: 9, avgCost: 0.42, count: 8 }],
+      generatedAt: new Date('2026-01-03T00:00:00.000Z'),
+    };
     const snap: SnapshotInput = {
       usage: makeUsage(),
       projectCosts: [{
@@ -39,7 +50,7 @@ suite('snapshotCache', () => {
         creditsToday: 0.5, credits7d: 1.5, credits30d: 2.5,
         sessionCount: 4, lastActive: new Date('2026-01-02T00:00:00.000Z'),
       }],
-      heatmap: { daily: [], hourly: [], generatedAt: new Date('2026-01-03T00:00:00.000Z') },
+      heatmap,
     };
     await writeSnapshot(snap, snapshotPath);
 
@@ -50,11 +61,22 @@ suite('snapshotCache', () => {
     assert.strictEqual(back.usage.lastUpdated.toISOString(), '2026-01-01T00:00:00.000Z');
     assert.strictEqual(back.projectCosts.length, 1);
     assert.ok(back.projectCosts[0].lastActive instanceof Date);
-    assert.ok(back.heatmap && back.heatmap.generatedAt instanceof Date);
+    assert.ok(back.heatmap, 'heatmap round-trips');
+    assert.strictEqual(back.heatmap.generatedAt.toISOString(), '2026-01-03T00:00:00.000Z');
+    // The heatmap body must survive serialization too, not just generatedAt.
+    assert.deepStrictEqual(back.heatmap.daily, heatmap.daily);
+    assert.deepStrictEqual(back.heatmap.hourly, heatmap.hourly);
   });
 
   test('returns null for an invalid snapshot file', async () => {
     await fsp.writeFile(snapshotPath, JSON.stringify({ version: 999, garbage: true }), 'utf-8');
+    assert.strictEqual(await readSnapshot(snapshotPath), null);
+  });
+
+  test('returns null for a corrupt (unparseable) snapshot file', async () => {
+    // Truncated/garbled content: JSON.parse itself throws, the read must still yield
+    // null instead of propagating the exception.
+    await fsp.writeFile(snapshotPath, '{ not json', 'utf-8');
     assert.strictEqual(await readSnapshot(snapshotPath), null);
   });
 
@@ -144,16 +166,18 @@ suite('snapshotCache', () => {
   });
 
   test('the default path resolves through os.homedir() — a redirected home round-trips', async () => {
-    // The no-argument filePath must build on os.homedir()/.claude: with the home env
-    // pointed at an empty temp dir the default read is null (also covers a home without
-    // .claude), then a default-path write lands exactly in <home>/.claude and reads back
-    // — never touching the real ~/.claude the user's running extension owns.
-    const homeVar = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
-    const prevHome = process.env[homeVar];
+    // The no-argument filePath must build on os.homedir()/.claude. os.homedir itself is
+    // stubbed (not process.env): the module resolves the path at call time through
+    // os.homedir(), so stubbing the function pins the actual contract without mutating
+    // the process environment for every other suite in this process.
+    const realHomedir = osModule.homedir;
     const home = path.join(tmpDir, 'redirected-home');
     const defaultPath = path.join(home, '.claude', 'vscode-claude-status-snapshot.json');
+    osModule.homedir = () => home;
     try {
-      process.env[homeVar] = home;
+      // Fail fast BEFORE any write: if the stub did not take, the default-path calls
+      // below would touch the real ~/.claude the user's running extension owns.
+      assert.notStrictEqual(osModule.homedir(), realHomedir(), 'os.homedir stub must be active before default-path IO');
       assert.strictEqual(await readSnapshot(), null, 'no snapshot in an empty redirected home');
       await fsp.mkdir(path.dirname(defaultPath), { recursive: true });
       await writeSnapshot({ usage: makeUsage(), projectCosts: [], heatmap: null });
@@ -162,7 +186,7 @@ suite('snapshotCache', () => {
       assert.ok(back, 'the default-path snapshot reads back');
       assert.strictEqual(back.usage.cost5h, 1.23);
     } finally {
-      if (prevHome === undefined) { delete process.env[homeVar]; } else { process.env[homeVar] = prevHome; }
+      osModule.homedir = realHomedir;
       await fsp.rm(home, { recursive: true, force: true });
     }
   });

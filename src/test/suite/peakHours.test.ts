@@ -48,6 +48,45 @@ suite('peakStatus', () => {
     assert.strictEqual(st.tzLabel, 'UTC-5');
   });
 
+  test('fractional offsets: Asia/Kolkata (+5:30) and Asia/Kathmandu (+5:45)', () => {
+    const kolkata = peakStatus(MON(7), 'z-ai', 'Asia/Kolkata');
+    assert.ok(kolkata);
+    assert.strictEqual(kolkata.windowStartLocal, '11:30');
+    assert.strictEqual(kolkata.windowEndLocal, '15:30');
+    assert.strictEqual(kolkata.tzLabel, 'UTC+5:30');
+
+    const kathmandu = peakStatus(MON(7), 'z-ai', 'Asia/Kathmandu');
+    assert.ok(kathmandu);
+    assert.strictEqual(kathmandu.windowStartLocal, '11:45');
+    assert.strictEqual(kathmandu.windowEndLocal, '15:45');
+    assert.strictEqual(kathmandu.tzLabel, 'UTC+5:45');
+  });
+
+  test('western zone crossing midnight: America/Los_Angeles labels span two local days', () => {
+    const st = peakStatus(MON(7), 'z-ai', 'America/Los_Angeles');   // PST = UTC−8 in November
+    assert.ok(st);
+    assert.strictEqual(st.windowStartLocal, '22:00');   // 06:00 UTC = previous day 22:00
+    assert.strictEqual(st.windowEndLocal, '02:00');     // 10:00 UTC = same morning 02:00
+    assert.strictEqual(st.tzLabel, 'UTC-8');
+  });
+
+  test('DST transition: the offset is taken at the window moment, not at "now"', () => {
+    // US clocks fall back on Sunday 2026-11-01. On Friday 30 Oct (still EDT, UTC−4)
+    // the active window renders with the pre-transition offset…
+    const fri = peakStatus(new Date(Date.UTC(2026, 9, 30, 7)), 'z-ai', 'America/New_York');
+    assert.ok(fri);
+    assert.strictEqual(fri.windowStartLocal, '02:00');
+    assert.strictEqual(fri.tzLabel, 'UTC-4');
+    // …while on Saturday 31 Oct (EDT) the *next* window already lies past the
+    // transition and must use EST (UTC−5), proving the label follows the window.
+    const sat = peakStatus(new Date(Date.UTC(2026, 9, 31, 12)), 'z-ai', 'America/New_York');
+    assert.ok(sat);
+    assert.strictEqual(sat.windowStartMs, Date.UTC(2026, 10, 2, 6), 'next window is Monday 2 Nov');
+    assert.strictEqual(sat.windowStartLocal, '01:00');
+    assert.strictEqual(sat.windowEndLocal, '05:00');
+    assert.strictEqual(sat.tzLabel, 'UTC-5');
+  });
+
   test('before today’s window: today is reported', () => {
     const st = peakStatus(MON(4), 'z-ai', 'UTC');
     assert.ok(st);
@@ -83,9 +122,12 @@ suite('peakStatus', () => {
   });
 
   test('an invalid user-supplied timezone falls back to the machine zone, never throws', () => {
+    // A direct call already fails the test on a throw. Equality with the no-timezone
+    // call is the actual fallback pin: format-only assertions would also pass if the
+    // invalid zone were silently replaced with UTC.
     const st = peakStatus(MON(7), 'z-ai', 'Mars/Olympus_Mons');
     assert.ok(st);
-    assert.match(st.windowStartLocal, /^\d{2}:\d{2}$/);
+    assert.deepStrictEqual(st, peakStatus(MON(7), 'z-ai'), 'invalid tz result equals the machine-zone result');
     assert.match(st.tzLabel, /^UTC([+-]\d+(:\d{2})?)?$/);
   });
 });
