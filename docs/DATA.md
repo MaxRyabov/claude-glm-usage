@@ -84,11 +84,131 @@ function calculateCost(usage: TokenUsage, pricing: TokenPricing): number {
 }
 ```
 
+### z.ai Credits (§) — `src/data/credits.ts`
+
+The z.ai coding plan bills usage in credits, not USD. Next to every USD aggregate the
+reader accumulates credits in the **same pass**, one turn at a time:
+
+```typescript
+export const GLM_CREDIT_MULTIPLIERS: CreditMultipliers = { input: 6.9, cacheRead: 1.7, output: 24 };
+export const GLM_FLASH_CREDIT_MULTIPLIERS: CreditMultipliers = { input: 2.3, cacheRead: 0.56, output: 8 };
+
+export const CREDITS_DIVISOR = 10_000;
+export const OFF_PEAK_FACTOR = 0.5;
+
+function creditMultipliersFor(model: string | undefined): CreditMultipliers | null {
+  if (!isCreditModel(model)) { return null; }
+  return (model ?? '').toLowerCase().includes('flash')
+    ? GLM_FLASH_CREDIT_MULTIPLIERS
+    : GLM_CREDIT_MULTIPLIERS;
+}
+
+export function creditsForEntry(entry: CreditEntry, peakActive: boolean): number {
+  const m = creditMultipliersFor(entry.model);
+  if (!m) { return 0; }
+  const weighted =
+    (entry.usage.input_tokens || 0) * m.input +
+    (entry.usage.cache_read_input_tokens || 0) * m.cacheRead +
+    (entry.usage.output_tokens || 0) * m.output;
+  const credits = weighted / CREDITS_DIVISOR;
+  return peakActive ? credits : credits * OFF_PEAK_FACTOR;
+}
+```
+
+> **Important verified facts:**
+> - `cache_creation_input_tokens` is **not** billed: z.ai folds cache writes into the
+>   input term.
+> - The GLM filter is by **model name only** — `isCreditModel` is
+>   `name.includes('glm') || name.includes('flash')`. A JSONL record carries no provider,
+>   and the history can be mixed (a live 7-day sample: 43 736 `glm-5.3` turns next to
+>   3 023 `claude-opus-5-5` turns), so `claude-*` and unknown models earn **0 credits** —
+>   they must never be charged at z.ai multipliers.
+> - The off-peak factor 0.5 is applied by `peakActive = isPeakAt(turn.timestamp)` — the
+>   turn's **own** timestamp, not the current moment: a session crossing 10:00 UTC is
+>   billed at both rates.
+> - **MCP calls are not represented in the formula.** `server_tool_use` entries carry no
+>   billing terms here, so the local credit count converges with the quota only *up to
+>   MCP usage* — the dashboard reconciliation line ("local §X · by quota §Y over 5h")
+>   shows exactly this residual.
+> - **Multiplier source:** the two tables above are z.ai plan constants (credits per
+>   10k tokens per token class) from the z.ai quota handbook, re-verified 2026-11-10
+>   against a live session — they are not user-configurable.
+
+### Peak Hours (z.ai) — `src/data/peakHours.ts`
+
+The peak window is a **tariff constant in UTC** (not configurable; z.ai fixes it):
+
+```typescript
+const PEAK_START_UTC_HOUR = 6;       // 06:00 UTC, inclusive
+const PEAK_END_UTC_HOUR = 10;        // 10:00 UTC, exclusive (14:00–18:00 SGT)
+const PEAK_START_UTC_MIN = PEAK_START_UTC_HOUR * 60;
+const PEAK_END_UTC_MIN = PEAK_END_UTC_HOUR * 60;
+
+export function isPeakAt(timestampMs: number): boolean {
+  const d = new Date(timestampMs);
+  const dow = d.getUTCDay();
+  if (dow === 0 || dow === 6) { return false; }   // Sat/Sun
+  const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+  return mins >= PEAK_START_UTC_MIN && mins < PEAK_END_UTC_MIN;
+}
+```
+
+`peakStatus(now, providerType)` returns `{ active, windowStartMs, windowEndMs,
+windowStartLocal, windowEndLocal, tzLabel }` for the status-bar ⚡ segment and the
+dashboard, or **null for every provider except `z-ai`** — `if (providerType !== 'z-ai')
+{ return null; }`. Local labels come from `Intl.DateTimeFormat` at the window moment.
+
+> **Prediction accuracy at the peak boundary.** The forecast extrapolates with a single
+> burn rate measured over the last 30 minutes, so near a window edge it can be off by up
+> to **2× in either direction**: leaving the peak makes it pessimistic (the rate still
+> carries peak-priced turns), a fully off-peak window right before the peak makes it
+> optimistic (the next hour bills double). Piecewise peak/off-peak extrapolation was
+> considered and rejected as over-engineering for a 4-hour window.
+
 ### Time Windows
 
 - **5h window**: entries where `timestamp >= now - 5 * 3600 * 1000`
 - **Day window**: entries where `timestamp >= start of today (local time)`
 - **7d window**: entries where `timestamp >= now - 7 * 24 * 3600 * 1000`
+
+### Subagent Logs
+
+The walk (`discoverFiles`) lists **top-level session files plus subagent logs** at one
+fixed level, no full recursion:
+
+```typescript
+const subDir = path.join(dir.p, entry.name, 'subagents');
+```
+
+- Cost, credits and the burn rate include subagent files — by a live-log sample they
+  carry the majority of credit spend, so skipping them understated every aggregate.
+- **Session counting and the active session use top-level files only** — a subagent log
+  is not a session.
+- Subagent files pass the same `realpath` + `isSafePath` gate as top-level files
+  (fail closed, M-3).
+- The walk cache signature includes the mtime of every session directory *and* its
+  `subagents/` directory: a new file inside an existing `subagents/` changes only that
+  directory's mtime, and without it in the signature the cached walk would keep serving
+  a stale file list.
+
+### Active Session — `findActiveSession`
+
+The `ctx NN%` segment is driven by the newest non-synthetic record among the **top-level
+JSONL files of the current workspace's project dir** (the `projectCost.ts` mapping):
+
+```typescript
+export const ACTIVE_SESSION_FRESHNESS_MS = 6 * 3600 * 1000;
+```
+
+- Freshness is 6 hours (just above the 5-hour quota window): the segment describes
+  current work, not yesterday's.
+- Each file's parse cache incrementally maintains the **last non-synthetic entry**
+  (`timestamp`, `model`, `usage` — the `maxTimestamp` role), so the lookup is a scan over
+  cached per-file records, O(files), with no disk read and no full entry scan per tick;
+  `<synthetic>` entries are skipped. A cache from before the field existed is backfilled
+  by one full scan on first load.
+- Context fill = `input + cache_read + cache_creation` of that last turn against the
+  model's window (`contextFill.ts`); ⚠ from 20k tokens below the window.
 
 ### Project Path Mapping
 

@@ -1,0 +1,246 @@
+import * as assert from 'assert';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import {
+  resolveContextWindow,
+  computeContextFill,
+  parseContextWindowOverride,
+  CONTEXT_WARN_MARGIN_TOKENS,
+} from '../../data/contextFill';
+import type { ContextFill } from '../../data/contextFill';
+import { getClaudeProjectsDir, __resetEntryCacheForTests } from '../../data/entryCache';
+
+const HOUR = 3600 * 1000;
+
+suite('resolveContextWindow', () => {
+  test('glm models get 200k', () => {
+    assert.strictEqual(resolveContextWindow('glm-4.6', null), 200_000);
+    assert.strictEqual(resolveContextWindow('glm-5.3', null), 200_000);
+  });
+
+  test('unknown models get the 200k default', () => {
+    assert.strictEqual(resolveContextWindow('some-unknown-model', null), 200_000);
+    assert.strictEqual(resolveContextWindow(undefined, null), 200_000);
+  });
+
+  test('the override applies only to non-claude models', () => {
+    assert.strictEqual(resolveContextWindow('glm-4.6', 400_000), 400_000);
+    assert.strictEqual(resolveContextWindow('some-unknown-model', 400_000), 400_000);
+    // claude reads its built-in table; an override must not widen a claude window.
+    assert.strictEqual(resolveContextWindow('claude-sonnet-5-5', 400_000), 200_000);
+  });
+
+  test('claude table covers full and short model names', () => {
+    for (const name of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'opus', 'sonnet', 'haiku']) {
+      assert.strictEqual(resolveContextWindow(name, null), 200_000, `${name} → 200k`);
+    }
+    // A claude name missing from the table falls back to the claude default, not the override.
+    assert.strictEqual(resolveContextWindow('claude-future-9', 400_000), 200_000);
+  });
+
+  test('[1m] wins for any model, claude included, and is case-insensitive', () => {
+    assert.strictEqual(resolveContextWindow('glm-4.6 [1m]', null), 1_000_000);
+    assert.strictEqual(resolveContextWindow('claude-sonnet-5-5 [1m]', null), 1_000_000);
+    assert.strictEqual(resolveContextWindow('GLM-5.3 [1M]', null), 1_000_000);
+    // …and beats an explicit override too.
+    assert.strictEqual(resolveContextWindow('glm-4.6 [1m]', 400_000), 1_000_000);
+  });
+});
+
+suite('parseContextWindowOverride', () => {
+  test('a positive integer (or an integer-valued float) passes through', () => {
+    assert.strictEqual(parseContextWindowOverride('400000'), 400_000);
+    assert.strictEqual(parseContextWindowOverride(' 400000 '), 400_000);
+    assert.strictEqual(parseContextWindowOverride('400000.0'), 400_000);
+  });
+
+  test('anything that would floor below 1 token falls back to null, never to 0', () => {
+    // "0.5" passes a naive n > 0 check but floors to a zero window: fillRatio would
+    // divide by zero and nearLimit would light up on an empty context.
+    assert.strictEqual(parseContextWindowOverride('0.5'), null);
+    assert.strictEqual(parseContextWindowOverride('0'), null);
+    assert.strictEqual(parseContextWindowOverride('-1000'), null);
+    assert.strictEqual(parseContextWindowOverride('not-a-number'), null);
+  });
+});
+
+suite('computeContextFill', () => {
+  // findActiveSession only reads project dirs inside the real ~/.claude/projects —
+  // use a clearly-named temp project subdir and clean it up afterwards (entryCache pattern).
+  const projectsDir = getClaudeProjectsDir();
+  let projDir: string;
+  // Freeze each timestamp once: recomputing Date.now() after the write races the clock.
+  const at = (hoursAgo: number): string => new Date(Date.now() - hoursAgo * HOUR).toISOString();
+
+  const line = (rid: string, model: string | undefined, hoursAgo: number, usage: Record<string, number>): string =>
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: at(hoursAgo),
+      requestId: rid,
+      message: {
+        id: `m_${rid}`,
+        ...(model !== undefined ? { model } : {}),
+        usage: {
+          input_tokens: usage.input ?? 0,
+          output_tokens: usage.output ?? 0,
+          cache_read_input_tokens: usage.cacheRead ?? 0,
+          cache_creation_input_tokens: usage.cacheCreate ?? 0,
+        },
+      },
+    });
+
+  setup(async function () {
+    // findActiveSession walks the real (possibly large) ~/.claude/projects tree.
+    this.timeout(20_000);
+    __resetEntryCacheForTests();
+    // Sweep leftovers from a previous crashed run: a suiteTeardown never runs after
+    // a crash, so the next run's setup is the reliable sweeper. Create the dir first —
+    // on a clean machine ~/.claude/projects may not exist yet and readdir would throw.
+    await fs.mkdir(projectsDir, { recursive: true });
+    for (const leftover of (await fs.readdir(projectsDir)).filter((d) => d.startsWith('_ctxfill-test-'))) {
+      await fs.rm(path.join(projectsDir, leftover), { recursive: true, force: true });
+    }
+    projDir = path.join(projectsDir, `_ctxfill-test-${Date.now()}-${process.pid}`);
+    await fs.mkdir(projDir, { recursive: true });
+  });
+  teardown(async () => { try { await fs.rm(projDir, { recursive: true, force: true }); } catch { /* ignore */ } });
+
+  test('fill = input + cache_read + cache_creation of the active session (output excluded)', async () => {
+    await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1', 'glm-4.6', 0.5, {
+      input: 20_000, cacheRead: 40_000, cacheCreate: 5_000, output: 500_000,
+    }) + '\n');
+    const fill = await computeContextFill(projDir, null);
+    assert.ok(fill, 'fresh session expected');
+    assert.strictEqual(fill.usedTokens, 65_000, 'output tokens do not fill the context window');
+    assert.strictEqual(fill.windowTokens, 200_000);
+    assert.ok(Math.abs(fill.fillRatio - 0.325) < 1e-9);
+    assert.strictEqual(fill.nearLimit, false);
+  });
+
+  test(`⚠ threshold is window − ${CONTEXT_WARN_MARGIN_TOKENS} tokens: 185k warns, 170k does not`, async () => {
+    await fs.writeFile(path.join(projDir, 's1.jsonl'), line('r1', 'glm-4.6', 1, { input: 170_000 }) + '\n');
+    await fs.writeFile(path.join(projDir, 's2.jsonl'), line('r2', 'glm-4.6', 0.5, { input: 185_000 }) + '\n');
+    // s1 is the older decoy session: if the latest-turn pick regressed to it,
+    // usedTokens would read 170_000 and fail below. The 170k threshold itself is
+    // checked separately, in a clean dir where 170k IS the active session.
+    const fill = await computeContextFill(projDir, null);
+    assert.ok(fill);
+    assert.strictEqual(fill.usedTokens, 185_000);
+    assert.strictEqual(fill.nearLimit, true, '185k ≥ 200k − 20k → warn');
+
+    const quiet = path.join(projectsDir, `_ctxfill-test-quiet-${Date.now()}-${process.pid}`);
+    await fs.mkdir(quiet, { recursive: true });
+    try {
+      await fs.writeFile(path.join(quiet, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 170_000 }) + '\n');
+      const q = await computeContextFill(quiet, null);
+      assert.ok(q);
+      assert.strictEqual(q.nearLimit, false, '170k < 180k → no warn');
+    } finally {
+      await fs.rm(quiet, { recursive: true, force: true });
+    }
+  });
+
+  test('nearLimit boundary is inclusive: exactly window − 20k warns, one token less does not', async () => {
+    const edge = path.join(projectsDir, `_ctxfill-test-edge-${Date.now()}-${process.pid}`);
+    const below = path.join(projectsDir, `_ctxfill-test-below-${Date.now()}-${process.pid}`);
+    await fs.mkdir(edge, { recursive: true });
+    await fs.mkdir(below, { recursive: true });
+    try {
+      await fs.writeFile(path.join(edge, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 180_000 }) + '\n');
+      await fs.writeFile(path.join(below, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 179_999 }) + '\n');
+      const atEdge = await computeContextFill(edge, null);
+      const oneBelow = await computeContextFill(below, null);
+      assert.ok(atEdge && oneBelow, 'both fresh sessions expected');
+      assert.strictEqual(atEdge.nearLimit, true, '180_000 = 200k − 20k is already near the limit (>=)');
+      assert.strictEqual(oneBelow.nearLimit, false, '179_999 is below the margin');
+    } finally {
+      await fs.rm(edge, { recursive: true, force: true });
+      await fs.rm(below, { recursive: true, force: true });
+    }
+  });
+
+  test('a tiny override window warns proportionally, not on an empty context', async () => {
+    // 8k < the 20k margin: the absolute edge would be negative and light ⚠ on
+    // anything, so the margin caps at 10% of the window (800) → warn at 7_200.
+    const tiny = path.join(projectsDir, `_ctxfill-test-tiny-${Date.now()}-${process.pid}`);
+    await fs.mkdir(tiny, { recursive: true });
+    try {
+      await fs.writeFile(path.join(tiny, 's.jsonl'), line('r-tiny-quiet', 'glm-4.6', 0.5, { input: 7_100 }) + '\n');
+      const quiet = await computeContextFill(tiny, 8_000);
+      assert.ok(quiet);
+      assert.strictEqual(quiet.nearLimit, false, '7_100 < 8_000 − 800 → no warn');
+
+      await fs.writeFile(path.join(tiny, 's2.jsonl'), line('r-tiny-warn', 'glm-4.6', 0.4, { input: 7_200 }) + '\n');
+      const warn = await computeContextFill(tiny, 8_000);
+      assert.ok(warn);
+      assert.strictEqual(warn.usedTokens, 7_200, 'the newest turn wins');
+      assert.strictEqual(warn.nearLimit, true, '7_200 ≥ 8_000 − 800 → warn');
+    } finally {
+      await fs.rm(tiny, { recursive: true, force: true });
+    }
+  });
+
+  test('an explicit freshnessMs narrows the window independently of the default', async () => {
+    const fresh = path.join(projectsDir, `_ctxfill-test-fr-${Date.now()}-${process.pid}`);
+    await fs.mkdir(fresh, { recursive: true });
+    try {
+      // A 3h-old turn: fresh by the 6h default, stale by an explicit 2h window.
+      await fs.writeFile(path.join(fresh, 's.jsonl'), line('r-fr', 'glm-4.6', 3, { input: 10_000 }) + '\n');
+      assert.strictEqual(await computeContextFill(fresh, null, 2 * 3600 * 1000), null,
+        'older than the explicit 2h window');
+      const fill = await computeContextFill(fresh, null, 4 * 3600 * 1000);
+      assert.ok(fill, 'within the explicit 4h window');
+      assert.strictEqual(fill.usedTokens, 10_000);
+    } finally {
+      await fs.rm(fresh, { recursive: true, force: true });
+    }
+  });
+
+  test('fillRatio is not clamped: an override below the real fill shows 104%', async () => {
+    await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1', 'glm-4.6', 0.5, { input: 104_000 }) + '\n');
+    const fill = await computeContextFill(projDir, 100_000);
+    assert.ok(fill);
+    assert.strictEqual(fill.windowTokens, 100_000);
+    assert.ok(Math.abs(fill.fillRatio - 1.04) < 1e-9, 'no clamp to 100%');
+    assert.strictEqual(fill.nearLimit, true);
+  });
+
+  test('a [1m] session resolves to the 1M window', async () => {
+    await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1', 'glm-4.6 [1m]', 0.5, { input: 150_000 }) + '\n');
+    const fill = await computeContextFill(projDir, null);
+    assert.ok(fill);
+    assert.strictEqual(fill.windowTokens, 1_000_000);
+    assert.strictEqual(fill.nearLimit, false, '150k of 1M is nowhere near the margin');
+  });
+
+  test('a claude session ignores the override', async () => {
+    await fs.writeFile(path.join(projDir, 's.jsonl'), line('r1', 'claude-sonnet-5-5', 0.5, { input: 100_000 }) + '\n');
+    const fill = await computeContextFill(projDir, 400_000);
+    assert.ok(fill);
+    assert.strictEqual(fill.windowTokens, 200_000);
+  });
+
+  test('returns null without a project dir, for a stale session, or with no model', async () => {
+    assert.strictEqual(await computeContextFill(null, null), null, 'no project dir');
+
+    // Each cause gets its own clean dir with its own requestId, so every assertion
+    // fails for exactly the reason its message claims.
+    const staleDir = path.join(projectsDir, `_ctxfill-test-stale-${Date.now()}-${process.pid}`);
+    const noModelDir = path.join(projectsDir, `_ctxfill-test-nomodel-${Date.now()}-${process.pid}`);
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.mkdir(noModelDir, { recursive: true });
+    try {
+      // Fresh enough timestamp, but no model on the turn — the window is unresolvable.
+      await fs.writeFile(path.join(noModelDir, 's.jsonl'), line('r-nomodel', undefined, 0.5, { input: 1_000 }) + '\n');
+      const noModel: ContextFill | null = await computeContextFill(noModelDir, null);
+      assert.strictEqual(noModel, null, 'a fresh session without a model cannot resolve a window');
+
+      await fs.writeFile(path.join(staleDir, 's.jsonl'), line('r-stale', 'glm-4.6', 7, { input: 1_000 }) + '\n');
+      // Exercises the 6h default on purpose — the explicit window has its own test.
+      assert.strictEqual(await computeContextFill(staleDir, null), null, 'last turn older than 6h');
+    } finally {
+      await fs.rm(staleDir, { recursive: true, force: true });
+      await fs.rm(noModelDir, { recursive: true, force: true });
+    }
+  });
+});

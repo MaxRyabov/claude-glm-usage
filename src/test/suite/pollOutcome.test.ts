@@ -10,6 +10,7 @@ import {
   actsOnRateData,
   snapshotDataSource,
   dashboardUsage,
+  rebaseSnapshotResets,
   pauseSeconds,
   DataSource,
   RETRY_DELAY_SECONDS,
@@ -285,5 +286,40 @@ suite('showsRateData and its consumers', () => {
       assert.strictEqual(u.showRateData, showsRateData('claude-ai', ds), ds);
       assert.strictEqual(u.utilization5h, 0.9, 'the rest of the payload passes through');
     }
+  });
+});
+
+suite('rebaseSnapshotResets', () => {
+  const H = 3600;
+  test('a fresh snapshot keeps its reset times', () => {
+    const now = 1_000_000_000_000;
+    const r = rebaseSnapshotResets({ resetIn5h: 2 * H, resetIn7d: 24 * H }, now, now);
+    assert.deepStrictEqual(r, { resetIn5h: 2 * H, resetIn7d: 24 * H });
+  });
+
+  test('an aged snapshot loses exactly its age — the window no longer stretches by it', () => {
+    const now = 1_000_000_000_000;
+    const r = rebaseSnapshotResets({ resetIn5h: 2 * H, resetIn7d: 24 * H }, now - 90 * 60 * 1000, now);
+    assert.ok(Math.abs(r.resetIn5h - (2 * H - 90 * 60)) < 1e-9);
+    assert.ok(Math.abs(r.resetIn7d - (24 * H - 90 * 60)) < 1e-9);
+  });
+
+  test('a window that has since reset reads as now, never negative; a future savedAt changes nothing', () => {
+    const now = 1_000_000_000_000;
+    assert.deepStrictEqual(
+      rebaseSnapshotResets({ resetIn5h: H, resetIn7d: H }, now - 8 * H * 1000, now),
+      { resetIn5h: 0, resetIn7d: 0 },
+    );
+    // Exactly at the boundary — elapsed == resetIn5h — the window has just reset:
+    // 0, not a negative remainder; the 7d window keeps its positive leftover.
+    assert.deepStrictEqual(
+      rebaseSnapshotResets({ resetIn5h: H, resetIn7d: 2 * H }, now - H * 1000, now),
+      { resetIn5h: 0, resetIn7d: H },
+    );
+    // Clock stepped back after the save: elapsed floors at 0.
+    assert.deepStrictEqual(
+      rebaseSnapshotResets({ resetIn5h: H, resetIn7d: 2 * H }, now, now - 5 * 1000),
+      { resetIn5h: H, resetIn7d: 2 * H },
+    );
   });
 });

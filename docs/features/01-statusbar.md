@@ -9,32 +9,74 @@ Lightweight, non-blocking, updates automatically.
 
 ## Display Format
 
-### Percent mode (claude-ai provider, `displayMode: "percent"`)
+The ` · ` (middle dot) separates the major segments — [quota windows + peak badge] →
+context → project cost. Inside the first group the windows and the ⚡ badge are joined
+by plain spaces. Each optional segment hides when it has no data.
+
+### Percent mode (default — claude-ai and z-ai, `displayMode: "percent"`)
 
 ```
-🤖 5h:78% 7d:84% | my-app:$3.21
+🤖 5h:78% 7d:84% · my-app:$3.21
 ```
+
+(The example shows claude-ai, whose cost segments are dollars; z-ai renders the
+same windows with credits — `my-app:§2.8k` — see the z-ai example below.)
 
 ### Warning mode (≥75% utilization)
 ```
-🤖 5h:78%⚠ 7d:84%⚠ | my-app:$3.21
+🤖 5h:78%⚠ 7d:84%⚠ · my-app:$3.21
 ```
 
 ### Denied (limit reached)
 ```
-🤖 5h:100%✗ | my-app:$3.21
+🤖 5h:100%✗ 7d:84%⚠ · my-app:$3.21
 ```
+
+### z-ai in peak hours (UTC weekdays 06:00–10:00)
+```
+🤖 5h:12% 7d:3% ⚡ · ctx 38% · my-app:§2.8k
+```
+- `⚡` — peak tariff is active (double credits); shown only for the z-ai provider,
+  even when the quota API is off. Recomputed on every render tick from the clock
+  alone — it never triggers a provider request. The window is defined in **UTC**:
+  weekdays Mon–Fri, `[06:00, 10:00)` UTC (start inclusive, end exclusive) — the
+  weekday and the hours come from the UTC calendar, not the machine zone. The
+  boundaries live in the `PEAK_START_UTC_MIN`/`PEAK_END_UTC_MIN` constants in
+  `src/data/peakHours.ts` (the z.ai coding-plan tariff schedule is the source of
+  truth — if the provider changes its hours, a release is needed); the window
+  math, including the local rendering across DST, is covered by
+  `src/test/suite/peakHours.test.ts`. The
+  tooltip's `Peak …` line renders the window in the local time zone for
+  convenience: inside the window it names the local end time (`Peak until 13:00`),
+  outside it names the local boundaries (`Peak 09:00–13:00 (UTC+3)`); DST
+  transitions shift that local rendering but never the window itself.
+- `ctx 38%` — context fill of the workspace's active session (last turn's
+  input + cache_read + cache_creation vs the model's context window). Hidden when
+  there is no fresh (< 6 h, `ACTIVE_SESSION_FRESHNESS_MS` in
+  `src/data/entryCache.ts`) session. `⚠` appears at the auto-compact edge:
+  `margin = min(CONTEXT_WARN_MARGIN_TOKENS, 10% of the window)` and the threshold
+  is `window − margin` — for a 200k window that is min(20k, 20k) = 20k → ⚠ from
+  180k; for a 32k window min(20k, 3.2k) = 3.2k → ⚠ from 28.8k. Both are fixed
+  constants in `src/data/contextFill.ts`, not settings, e.g. `ctx 93%⚠`; a
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` override set below the real
+  fill shows its true value (`ctx 104%`) without clamping.
+- `§2.8k` — the cost segment follows `claudeStatus.display.primaryUnit`
+  (`auto | credits | usd`, default `auto`): credits (§) for z-ai, dollars ($)
+  for everyone else; explicit `credits` degrade to dollars on providers without
+  a credit tariff. Applies to the project segment, cost-mode windows
+  (`5h:§2.8k 7d:§9.1k`) and the cost tooltip. Budgets always stay in USD.
 
 ### Stale data (cache expired, or `rateLimitApi.enabled: false` with cached data)
 ```
-🤖 5h:78% 7d:84% [32m ago] | my-app:$3.21   ← minutes (< 1 h)
-🤖 5h:78% 7d:84% [2h 15m ago] | my-app:$3.21 ← hours  (1 h – 23 h)
-🤖 5h:78% 7d:84% [1d 3h ago] | my-app:$3.21  ← days   (≥ 24 h)
+🤖 5h:78% 7d:84% [32m ago] · my-app:$3.21   ← minutes (< 1 h)
+🤖 5h:78% 7d:84% [2h 15m ago] · my-app:$3.21 ← hours  (1 h – 23 h)
+🤖 5h:78% 7d:84% [1d 3h ago] · my-app:$3.21  ← days   (≥ 24 h)
 ```
 
-### Cost mode (non-claude-ai provider, or `displayMode: "cost"`)
+### Cost mode (`displayMode: "cost"`, or local-only without a quota cache)
 ```
-🤖 5h:$14.21 7d:$53.17 | my-app:$3.21
+🤖 5h:$14.21 7d:$53.17 · my-app:$3.21        ← primary unit usd
+🤖 5h:§2.8k 7d:§9.1k · my-app:§2.8k          ← primary unit credits (z-ai)
 ```
 
 ### No data yet (initial state)
@@ -47,16 +89,33 @@ Lightweight, non-blocking, updates automatically.
 🤖 Not logged in
 ```
 
+### Rejected credentials (auth-rejected)
+```
+🤖 Access refused      ← claude-ai, HTTP 403
+🤖 Login rejected      ← claude-ai, other auth failures
+🤖 API key rejected    ← any other provider
+```
+
+Degraded states (`no-credentials`, `no-data`, `auth-rejected`) never show the
+peak badge or the context segment. `no-data` means no quota cache **and** no local
+JSONL cost data — the whole label is replaced. A z-ai window without a quota cache
+but with local cost data (`local-only`) is not degraded: it shows the cost windows,
+the ⚡ badge and the context segment as usual.
+
 ---
 
 ## Provider Behavior
 
-| Provider | Rate % shown | Mode |
-|----------|-------------|------|
-| `claude-ai`, API enabled | Yes | percent (default) or cost |
-| `claude-ai`, API disabled, cache exists | Yes (stale) | percent with `[X ago]` (m / h / d) |
-| `claude-ai`, API disabled, no cache | No | cost only |
-| `aws-bedrock` / `api-key` / `unknown` | No | cost only (always) |
+| Provider | Rate % shown | Mode | Peak ⚡ | Primary unit |
+|----------|-------------|------|---------|--------------|
+| `claude-ai`, API enabled | Yes | percent (default) or cost | never | usd |
+| `claude-ai`, API disabled, cache exists | Yes (stale) | percent with `[X ago]` (m / h / d) | never | usd |
+| `claude-ai`, API disabled, no cache | No | cost only | never | usd |
+| `z-ai`, API enabled | Yes (quota) | percent (default) or cost | only in peak window | credits (auto) |
+| `z-ai`, API disabled, cache exists | Yes (stale, quota) | percent with `[X ago]` (m / h / d) | only in peak window | credits (auto) |
+| `z-ai`, API disabled / no quota cache (local cost data present) | No | cost only (local-only) | only in peak window | credits (auto) |
+| `z-ai`, no quota cache, no local cost data | No | no-data (label replaced) | never | credits (auto) |
+| `aws-bedrock` / `api-key` / `unknown` | No | cost only (always) | never | usd |
 
 ---
 
@@ -90,13 +149,20 @@ Use VSCode theme color IDs (not hardcoded hex):
 | Denied (100%) | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
 | Stale data | — | `descriptionForeground` (dimmed) |
 | No credentials | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
-| Non-claude-ai | — | — (default) |
+| Rejected credentials (auth-rejected) | `statusBarItem.errorBackground` | `statusBarItem.errorForeground` |
+| No data (`no-data`) | — | — (default) |
+| Provider without rate limits (`!supportsRateLimit`) or `local-only` | — | — (default) |
+
+> z-ai in quota mode is not «non-claude-ai» here: `supportsRateLimit('z-ai')` is
+> true, so its warning/denied states get the same colors as claude-ai.
 
 ```typescript
 function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
   const { limitStatus, dataSource, providerType } = data
 
-  if (dataSource === 'no-credentials') {
+  // A refused credential is the user's problem to fix, so it gets the error colour
+  // rather than the muted one used for data that is merely stale.
+  if (dataSource === 'no-credentials' || dataSource === 'auth-rejected') {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     item.color = new vscode.ThemeColor('statusBarItem.errorForeground')
     return
@@ -106,8 +172,9 @@ function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
     item.color = new vscode.ThemeColor('descriptionForeground')
     return
   }
-  // Non-claude-ai providers: no warning/error colors
-  if (providerType !== 'claude-ai') {
+  // Providers without live rate-limit data don't get warning/error colors.
+  // claude-ai and z-ai (when not in cost-only local mode) do.
+  if (!supportsRateLimit(providerType) || dataSource === 'local-only') {
     item.backgroundColor = undefined
     item.color = undefined
     return
@@ -139,6 +206,8 @@ Claude Code Usage
 5h window:   78% [XXXXXX..] resets in 2h 47m
 7d window:   84% [XXXXXXX.] resets in 4d 8h
 
+Context: 41%                ← mirrors the ctx segment (hidden without a fresh session)
+
 Token Cost (local)
 ─────────────────────────────
 5h:   in:38.5K out:127.8K  $14.21
@@ -151,6 +220,31 @@ Project: my-app
 Last updated: just now
 Click to open dashboard →
 ```
+
+### z.ai provider (peak line + credits)
+```
+Z.AI Usage
+Peak until 13:00            ← inside the peak window (local time)
+─────────────────────────────
+5h window:   12% [X........] resets in 3h 05m
+7d window:   3%  [.........] resets in 6d 2h
+
+Context: 38%                ← mirrors the ctx segment (hidden without a fresh session)
+
+Token Cost (local)
+─────────────────────────────
+5h:   in:38.5K out:127.8K  §2.8k
+day:  §11.0k
+7d:   §44.0k
+
+Project: my-app
+  Today: §2.8k  |  7d: §41.0k
+
+Last updated: just now
+Click to open dashboard →
+```
+Outside the peak the second line names the window boundaries in the local zone:
+`Peak 09:00–13:00 (UTC+3)`. The tooltip follows the primary unit; budgets stay in USD.
 
 ### Non-claude-ai provider (e.g. AWS Bedrock)
 ```
@@ -179,6 +273,13 @@ Build with `\n`-separated string. VSCode renders tooltip as plain text.
 | JSONL file change (FileWatcher) | `DataManager.refresh()` → update |
 | Timer (every 60 seconds) | Re-render from cache (no API call) |
 | User clicks "↻ Refresh" in WebView | `DataManager.forceRefresh()` → update |
+
+The ⚡ peak badge and the local clock part of the tooltip are recomputed from the
+current time on every re-render (`buildLabel`/`buildTooltip` take a `now` parameter,
+defaulting to the wall clock) — entering/leaving the peak window is reflected with at
+most one cycle of delay, without a separate timer and without any provider request.
+Changing `claudeStatus.display.primaryUnit` re-renders immediately via the existing
+`onDidChangeConfiguration` handler — no restart needed.
 
 Timer implementation:
 ```typescript

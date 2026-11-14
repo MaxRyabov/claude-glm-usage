@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import { ClaudeUsageData, ProjectCostData } from './data/dataManager';
-import { config } from './config';
+import { peakStatus } from './data/peakHours';
+import type { PeakStatus } from './data/peakHours';
+import type { ContextFill } from './data/contextFill';
+import { config, resolvePrimaryUnit, formatCredits } from './config';
 
 export function formatDuration(seconds: number): string {
   if (seconds < 3600) {
@@ -37,9 +40,55 @@ function truncateName(name: string): string {
   return name.length > 12 ? name.slice(0, 11) + '…' : name;
 }
 
-export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[] = []): string {
+/**
+ * Cost formatter in the primary unit (claudeStatus.display.primaryUnit): credits (§) for
+ * z-ai under auto/credits, dollars for everyone else. One resolver for the label, the
+ * cost-mode windows and the tooltip, so "§2.8k" means the same number everywhere.
+ */
+function costFormatter(providerType: ClaudeUsageData['providerType']): (usd: number, credits: number) => string {
+  const unit = resolvePrimaryUnit(providerType, config.primaryUnitSetting);
+  return (usd: number, credits: number): string =>
+    unit === 'credits' ? formatCredits(credits) : `$${usd.toFixed(2)}`;
+}
+
+/**
+ * claude-ai (Anthropic windows) and z-ai (quota) expose live rate-limit data. The label,
+ * the tooltip and the color rules all ask this one question — keeping it in one place
+ * matters when a provider is added.
+ */
+function supportsRateLimit(providerType: ClaudeUsageData['providerType']): boolean {
+  return providerType === 'claude-ai' || providerType === 'z-ai';
+}
+
+/** One tooltip line about the peak window (z-ai only): inside — the end time, outside — the local boundaries. */
+function peakLine(peak: PeakStatus): string {
+  return peak.active
+    ? vscode.l10n.t('Peak until {0}', peak.windowEndLocal)
+    : vscode.l10n.t('Peak {0}–{1} ({2})', peak.windowStartLocal, peak.windowEndLocal, peak.tzLabel);
+}
+
+/** Shared ctx-percent rendering — one rule for the label segment and the tooltip line. */
+function contextPercent(context: ContextFill): string {
+  return `${Math.round(context.fillRatio * 100)}%${context.nearLimit ? '⚠' : ''}`;
+}
+
+/**
+ * One tooltip line with the context fill — the tooltip must convey everything the label
+ * shows (Accessibility), so the ctx segment gets a line of its own.
+ */
+function contextLine(context: ContextFill): string {
+  return vscode.l10n.t('Context: {0}', contextPercent(context));
+}
+
+export function buildLabel(
+  data: ClaudeUsageData,
+  projectCosts: ProjectCostData[] = [],
+  now: Date = new Date(),
+): string {
   const { dataSource, utilization5h, utilization7d, limitStatus, cost5h, cost7d, cacheAge, has7dLimit, providerType } = data;
+  const { localCredits5h, localCredits7d, context } = data;
   const displayMode = config.displayMode;
+  const fmtCost = costFormatter(providerType);
 
   if (dataSource === 'no-credentials') {
     return vscode.l10n.t('🤖 Not logged in');
@@ -64,15 +113,14 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
 
   // claude-ai and z-ai expose utilization windows; other providers (Bedrock, API key)
   // and any provider without live rate data (local-only) always use cost mode.
-  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
-  const useCostMode = !supportsRateLimit || dataSource === 'local-only' || displayMode === 'cost';
+  const useCostMode = !supportsRateLimit(providerType) || dataSource === 'local-only' || displayMode === 'cost';
 
   let part5h: string;
   let part7d: string;
 
   if (useCostMode) {
-    part5h = `5h:$${cost5h.toFixed(2)}`;
-    part7d = ` 7d:$${cost7d.toFixed(2)}`;
+    part5h = `5h:${fmtCost(cost5h, localCredits5h)}`;
+    part7d = ` 7d:${fmtCost(cost7d, localCredits7d)}`;
   } else {
     // percent mode — claude-ai and z-ai
     //
@@ -97,21 +145,38 @@ export function buildLabel(data: ClaudeUsageData, projectCosts: ProjectCostData[
       : '';
   }
 
+  // Peak marker (z-ai only, next to the quota windows): recomputed from `now` on every
+  // render tick, so the badge enters/leaves with the clock and never goes stale between
+  // refreshes. Pure date math — never a provider request.
+  const peak = peakStatus(now, providerType);
+  const peakPart = peak?.active ? ' ⚡' : '';
+
+  // Context fill of the workspace's active session: absent when there is no fresh session,
+  // so the segment simply hides. fillRatio is not clamped — an override below the real
+  // fill shows its true 104%.
+  const ctxPart = context ? `ctx ${contextPercent(context)}` : '';
+
   // Project cost suffix
   let projectPart = '';
   if (config.showProjectCost && projectCosts.length > 0) {
     if (projectCosts.length === 1) {
       const pj = projectCosts[0];
       const shortName = truncateName(pj.projectName);
-      projectPart = ` | ${shortName}:$${pj.costToday.toFixed(2)}`;
+      projectPart = `${shortName}:${fmtCost(pj.costToday, pj.creditsToday)}`;
     } else {
       // Multi-root: aggregate
-      const total = projectCosts.reduce((sum, p) => sum + p.costToday, 0);
-      projectPart = ` | PJ:$${total.toFixed(2)}`;
+      const totalUsd = projectCosts.reduce((sum, p) => sum + p.costToday, 0);
+      const totalCredits = projectCosts.reduce((sum, p) => sum + p.creditsToday, 0);
+      projectPart = `PJ:${fmtCost(totalUsd, totalCredits)}`;
     }
   }
 
-  const main = `🤖 ${part5h}${part7d}${projectPart}`;
+  // Four segments don't fit with the old ` | ` — the separator is ` · ` (spec D6).
+  const parts = [`${part5h}${part7d}${peakPart}`];
+  if (ctxPart) { parts.push(ctxPart); }
+  if (projectPart) { parts.push(projectPart); }
+
+  const main = `🤖 ${parts.join(' · ')}`;
   return isStale ? `${main}${staleSuffix}` : main;
 }
 
@@ -143,12 +208,18 @@ function rejectedHint(providerType: ClaudeUsageData['providerType'], status: 401
   return vscode.l10n.t('The provider rejected your API key.\nCheck ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) in ~/.claude/settings.json');
 }
 
-export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostData[] = []): string {
+export function buildTooltip(
+  data: ClaudeUsageData,
+  projectCosts: ProjectCostData[] = [],
+  now: Date = new Date(),
+): string {
   const {
     utilization5h, utilization7d, resetIn5h, resetIn7d,
     cost5h, costDay, cost7d, tokensIn5h, tokensOut5h,
     cacheAge, dataSource, has7dLimit, providerType,
   } = data;
+  const { localCredits5h, localCreditsDay, localCredits7d } = data;
+  const fmtCost = costFormatter(providerType);
 
   const tokenExpired = data.pollNotice === 'token-expired'
     ? vscode.l10n.t('Claude Code login token expired — any Claude Code request refreshes it')
@@ -172,12 +243,13 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
   if (tokenExpired) { lines.push(tokenExpired, ''); }
 
   // Rate-limit section — claude-ai (Anthropic windows) and z-ai (quota), when live data exists
-  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
-  if (supportsRateLimit && dataSource !== 'local-only') {
+  const peak = peakStatus(now, providerType);
+  if (supportsRateLimit(providerType) && dataSource !== 'local-only') {
     const title = providerType === 'z-ai' ? vscode.l10n.t('Z.AI Usage') : vscode.l10n.t('Claude Code Usage');
     const bar5h = buildBar(utilization5h, 8);
     lines.push(
       title,
+      ...(peak ? [peakLine(peak)] : []),
       '─────────────────────────────',
       `5h window:   ${formatPercent(utilization5h)} [${bar5h}] resets in ${formatDuration(resetIn5h)}`,
     );
@@ -192,22 +264,32 @@ export function buildTooltip(data: ClaudeUsageData, projectCosts: ProjectCostDat
       : providerType === 'z-ai' ? vscode.l10n.t('Z.AI / GLM')
       : providerType === 'custom-endpoint' ? vscode.l10n.t('Custom endpoint')
       : vscode.l10n.t('Claude Code');
-    lines.push(`Claude Code (${providerLabel})`, '─────────────────────────────', '');
+    lines.push(
+      `Claude Code (${providerLabel})`,
+      ...(peak ? [peakLine(peak)] : []),
+      '─────────────────────────────',
+      '',
+    );
+  }
+
+  // Context fill — the tooltip conveys everything the label shows (Accessibility).
+  if (data.context) {
+    lines.push(contextLine(data.context), '');
   }
 
   lines.push(
     vscode.l10n.t('Token Cost (local)'),
     '─────────────────────────────',
-    `5h:   in:${formatTokens(tokensIn5h)} out:${formatTokens(tokensOut5h)}  $${cost5h.toFixed(2)}`,
-    `day:  $${costDay.toFixed(2)}`,
-    `7d:   $${cost7d.toFixed(2)}`,
+    `5h:   in:${formatTokens(tokensIn5h)} out:${formatTokens(tokensOut5h)}  ${fmtCost(cost5h, localCredits5h)}`,
+    `day:  ${fmtCost(costDay, localCreditsDay)}`,
+    `7d:   ${fmtCost(cost7d, localCredits7d)}`,
   );
 
   if (projectCosts.length > 0) {
     lines.push('');
     for (const pj of projectCosts) {
       lines.push(vscode.l10n.t('Project: {0}', pj.projectName));
-      lines.push(`  ${vscode.l10n.t('Today')}: $${pj.costToday.toFixed(2)}  |  ${vscode.l10n.t('7 days')}: $${pj.cost7d.toFixed(2)}`);
+      lines.push(`  ${vscode.l10n.t('Today')}: ${fmtCost(pj.costToday, pj.creditsToday)}  |  ${vscode.l10n.t('7 days')}: ${fmtCost(pj.cost7d, pj.credits7d)}`);
     }
   }
 
@@ -234,8 +316,7 @@ function applyColor(item: vscode.StatusBarItem, data: ClaudeUsageData): void {
 
   // Providers without live rate-limit data don't get warning/error colors.
   // claude-ai and z-ai (when not in cost-only local mode) do.
-  const supportsRateLimit = providerType === 'claude-ai' || providerType === 'z-ai';
-  if (!supportsRateLimit || dataSource === 'local-only') {
+  if (!supportsRateLimit(providerType) || dataSource === 'local-only') {
     item.backgroundColor = undefined;
     item.color = undefined;
     return;
@@ -271,8 +352,11 @@ export class StatusBarManager {
   }
 
   update(data: ClaudeUsageData, projectCosts: ProjectCostData[] = []): void {
-    this.item.text = buildLabel(data, projectCosts);
-    this.item.tooltip = buildTooltip(data, projectCosts);
+    // One clock reading for both renderings: two separate new Date() calls could straddle
+    // the peak-window boundary and print ⚡ in the label but not in the tooltip.
+    const now = new Date();
+    this.item.text = buildLabel(data, projectCosts, now);
+    this.item.tooltip = buildTooltip(data, projectCosts, now);
     applyColor(this.item, data);
   }
 
