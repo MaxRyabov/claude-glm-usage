@@ -80,7 +80,9 @@ function tzLabelOf(at: Date, timeZone?: string): string {
     parts = new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' }).formatToParts(at);
   }
   const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
-  return name.replace(/^GMT/, 'UTC');   // "GMT+3" → "UTC+3"
+  // "GMT+3" → "UTC+3"; a zero offset is "UTC" everywhere — some ICU builds emit
+  // "GMT+0" (e.g. ubuntu system ICU) while others emit plain "GMT".
+  return name.replace(/^GMT/, 'UTC').replace(/\+0$/, '');
 }
 
 /**
