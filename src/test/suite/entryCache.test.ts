@@ -236,8 +236,13 @@ suite('EntryCache discovery', () => {
         // real home instead of the temp one.
         assert.notStrictEqual(osModule.homedir(), realHomedir(), 'os.homedir stub must be active before discovery');
         const all = await discoverFiles();
+        // discoverFiles results are realpath-canonicalized (the gate resolves every
+        // file), so the expectation must be canonical too: a lexical path.resolve
+        // comparison breaks on 8.3 temp segments and on the drive-letter casing
+        // GetFinalPathNameByHandle returns (e.g. CI "D:" vs canonical "d:").
+        const targetReal = await fs.realpath(target);
         assert.ok(
-          all.some((p) => path.resolve(p) === path.resolve(target)),
+          all.some((p) => p === targetReal),
           'files under a symlinked projects root are discovered',
         );
       } finally {
