@@ -35,6 +35,11 @@ export function isPeakAt(timestampMs: number): boolean {
   return mins >= PEAK_START_UTC_MIN && mins < PEAK_END_UTC_MIN;
 }
 
+/** Advance a UTC date in place day by day until it lands on a weekday (Mon–Fri). */
+function advanceToWeekday(d: Date): void {
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) { d.setUTCDate(d.getUTCDate() + 1); }
+}
+
 /** Start (06:00 UTC) of the nearest window: today's while it is active or not yet begun, else the next weekday's. */
 function nearestWindowStart(now: Date): number {
   const start = new Date(
@@ -42,16 +47,13 @@ function nearestWindowStart(now: Date): number {
   );
   if (start.getTime() > now.getTime()) {
     // Today's window has not begun: use it on a weekday, else roll forward.
-    while (start.getUTCDay() === 0 || start.getUTCDay() === 6) {
-      start.setUTCDate(start.getUTCDate() + 1);
-    }
+    advanceToWeekday(start);
     return start.getTime();
   }
   if (isPeakAt(now.getTime())) { return start.getTime(); }   // inside today's window
-  // Today's window is over: the next weekday 06:00 UTC (skips the weekend).
-  do {
-    start.setUTCDate(start.getUTCDate() + 1);
-  } while (start.getUTCDay() === 0 || start.getUTCDay() === 6);
+  // Today's window is over: the next weekday 06:00 UTC (skips the weekend; at least +1 day).
+  start.setUTCDate(start.getUTCDate() + 1);
+  advanceToWeekday(start);
   return start.getTime();
 }
 
@@ -72,17 +74,34 @@ function localTimeLabel(date: Date, timeZone?: string): string {
   }
 }
 
+/** Degraded, never-throwing offset label built by hand from the machine zone. */
+function manualOffsetLabel(at: Date): string {
+  const mins = -at.getTimezoneOffset();
+  if (mins === 0) { return 'UTC'; }
+  const sign = mins < 0 ? '-' : '+';
+  const abs = Math.abs(mins);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return `UTC${sign}${h}${m ? `:${String(m).padStart(2, '0')}` : ''}`;
+}
+
 function tzLabelOf(at: Date, timeZone?: string): string {
   let parts: Intl.DateTimeFormatPart[];
   try {
     parts = new Intl.DateTimeFormat('en', { timeZone, timeZoneName: 'shortOffset' }).formatToParts(at);
   } catch {
-    parts = new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' }).formatToParts(at);
+    try {
+      parts = new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' }).formatToParts(at);
+    } catch {
+      // Last resort for ICU builds without shortOffset support: a hand-built machine-zone
+      // label. Degraded (always the machine zone), but tzLabelOf can no longer throw.
+      return manualOffsetLabel(at);
+    }
   }
   const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
-  // "GMT+3" → "UTC+3"; a zero offset is "UTC" everywhere — some ICU builds emit
-  // "GMT+0" (e.g. ubuntu system ICU) while others emit plain "GMT".
-  return name.replace(/^GMT/, 'UTC').replace(/\+0$/, '');
+  // "GMT+3" → "UTC+3"; a zero offset is "UTC" everywhere — ICU builds differ here
+  // ("GMT", "GMT+0", "GMT-0", "GMT+00:00"), so collapse every zero form.
+  return name.replace(/^GMT/, 'UTC').replace(/[+-]0{1,2}(?::00)?$/, '');
 }
 
 /**
@@ -91,10 +110,13 @@ function tzLabelOf(at: Date, timeZone?: string): string {
  */
 export function peakStatus(now: Date, providerType: string, timeZone?: string): PeakStatus | null {
   if (providerType !== 'z-ai') { return null; }
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) { return null; }   // Invalid Date must not reach the label formatting (format(NaN) throws RangeError)
   const windowStartMs = nearestWindowStart(now);
   const windowEndMs = windowStartMs + PEAK_WINDOW_MS;
   return {
-    active: isPeakAt(now.getTime()),
+    // The window is already computed — membership follows from it, no second isPeakAt pass.
+    active: nowMs >= windowStartMs && nowMs < windowEndMs,
     windowStartMs,
     windowEndMs,
     windowStartLocal: localTimeLabel(new Date(windowStartMs), timeZone),

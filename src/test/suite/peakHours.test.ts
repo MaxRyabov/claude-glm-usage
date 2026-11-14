@@ -81,6 +81,11 @@ suite('peakStatus', () => {
     assert.strictEqual(peakStatus(MON(7), 'unknown'), null);
   });
 
+  test('an Invalid Date yields null instead of throwing out of label formatting', () => {
+    assert.strictEqual(peakStatus(new Date(NaN), 'z-ai'), null);
+    assert.strictEqual(peakStatus(new Date('not a date'), 'z-ai'), null);
+  });
+
   test('active window: absolute bounds and local labels via Intl (Europe/Moscow = UTC+3 in November)', () => {
     const st = peakStatus(MON(7), 'z-ai', 'Europe/Moscow');
     assert.ok(st);
