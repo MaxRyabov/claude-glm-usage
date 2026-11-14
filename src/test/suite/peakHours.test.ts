@@ -212,11 +212,9 @@ suite('peakStatus', () => {
     // The invalid zone falls back to the machine zone: identical payloads.
     assert.deepStrictEqual(invalid, machine, 'invalid tz result equals the machine-zone result');
     // Machine zone is Moscow in November: the window renders on the MSK clock.
+    // A hardcoded-UTC regression would render 'UTC'/'06:00' — the exact expects
+    // below pin that away, observable even when the parent process runs on UTC.
     assert.strictEqual(machine.tzLabel, 'UTC+3');
     assert.strictEqual(machine.windowStartLocal, '09:00');   // 06:00 UTC + 3h
-    // A hardcoded-UTC regression would render 'UTC'/'06:00' — pin them non-equal so
-    // the fallback stays observable even when the parent process itself runs on UTC.
-    assert.notStrictEqual(machine.tzLabel, 'UTC');
-    assert.notStrictEqual(machine.windowStartLocal, '06:00');
   });
 });
