@@ -49,9 +49,12 @@ const ZAI_DEFAULT_PRICING: TokenPricing = {
 // of the model name. z.ai figures come from the official pricing page
 // (https://docs.z.ai/guides/overview/pricing); `cacheRead` = "Cached Input". z.ai
 // publishes no separate cache-write tier, so `cacheCreate` mirrors the input rate.
-// Re-verify before release — the GLM lineup changes often (current flagship: GLM-5.1).
+// Re-verify before release — the GLM lineup changes often (current flagship: GLM-5.3,
+// verified 2026-11-10: $1.4 / $0.26 / $4.4; GLM-5.3-Flash $0.15 / $0.03 / $0.50).
 export const MODEL_PRICING: Record<string, TokenPricing> = {
   // --- z.ai GLM (text) ---
+  'glm-5.3-flash':   { inputPerMillion: 0.15, outputPerMillion: 0.50, cacheReadPerMillion: 0.03, cacheCreatePerMillion: 0.15 },
+  'glm-5.3':         { inputPerMillion: 1.40, outputPerMillion: 4.40, cacheReadPerMillion: 0.26, cacheCreatePerMillion: 1.40 },
   'glm-5.1':         { inputPerMillion: 1.40, outputPerMillion: 4.40, cacheReadPerMillion: 0.26, cacheCreatePerMillion: 1.40 },
   'glm-5-turbo':     { inputPerMillion: 1.20, outputPerMillion: 4.00, cacheReadPerMillion: 0.24, cacheCreatePerMillion: 1.20 },
   'glm-5':           { inputPerMillion: 1.00, outputPerMillion: 3.20, cacheReadPerMillion: 0.20, cacheCreatePerMillion: 1.00 },

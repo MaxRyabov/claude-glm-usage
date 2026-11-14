@@ -25,6 +25,23 @@ suite('resolvePricing', () => {
     assert.strictEqual(resolvePricing('glm-5').inputPerMillion, 1.00);
   });
 
+  test('glm-5.3 and glm-5.3-flash resolve to their own rates (official z.ai pricing)', () => {
+    // Not the stale glm-5 prefix tier ($1.00): the official page lists
+    // GLM-5.3 $1.4/$0.26/$4.4 and GLM-5.3-Flash $0.15/$0.03/$0.50 per 1M.
+    const base = resolvePricing('glm-5.3', { providerType: 'z-ai' });
+    assert.strictEqual(base.inputPerMillion, 1.40);
+    assert.strictEqual(base.cacheReadPerMillion, 0.26);
+    assert.strictEqual(base.outputPerMillion, 4.40);
+    const flash = resolvePricing('glm-5.3-flash', { providerType: 'z-ai' });
+    assert.strictEqual(flash.inputPerMillion, 0.15);
+    assert.strictEqual(flash.cacheReadPerMillion, 0.03);
+    assert.strictEqual(flash.outputPerMillion, 0.50);
+    // The builtin table wins before the provider default, so the same must hold with
+    // no providerType in the context at all.
+    assert.strictEqual(resolvePricing('glm-5.3').inputPerMillion, 1.40);
+    assert.strictEqual(resolvePricing('glm-5.3-flash').inputPerMillion, 0.15);
+  });
+
   test('matches Claude models by prefix with version suffix', () => {
     assert.strictEqual(resolvePricing('claude-opus-4-7').inputPerMillion, 15.00);
     assert.strictEqual(resolvePricing('claude-sonnet-4-6').inputPerMillion, 3.00);

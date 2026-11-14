@@ -35,7 +35,6 @@
   "{0} ago": "{0}前",
   "↻ Refresh": "↻ 更新",
   "$ / %": "$ / %",
-  "Current Usage": "現在の使用状況",
   "5h window": "5時間ウィンドウ",
   "7d window": "7日間ウィンドウ",
   "Token Cost": "トークンコスト",
@@ -119,5 +118,13 @@
   "(login token expired)": "（ログイントークンの期限切れ）",
   "Z.AI Usage": "Z.AI 使用状況",
   "Z.AI / GLM": "Z.AI / GLM",
-  "Custom endpoint": "カスタムエンドポイント"
+  "Custom endpoint": "カスタムエンドポイント",
+  "Peak until {0}": "ピークは {0} まで",
+  "Peak {0}–{1} ({2})": "ピーク {0}–{1} ({2})",
+  "Context: {0}": "コンテキスト: {0}",
+  "Now": "現在",
+  "{0} cr/hr": "{0} クレジット/時",
+  "local {0} · quota {1} over 5h": "ローカル {0} · クォータ {1}（5時間）",
+  "5h credits left": "残りクレジット（5時間）",
+  "The 5h window will not be exhausted before the reset.": "5時間ウィンドウはリセット前に使い切られません。"
 }

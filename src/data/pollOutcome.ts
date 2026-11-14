@@ -200,3 +200,23 @@ export function dashboardUsage<T extends { providerType: ClaudeProvider; dataSou
 ): T & { showRateData: boolean } {
   return { ...usage, showRateData: showsRateData(usage.providerType, usage.dataSource) };
 }
+
+/**
+ * Rebase the relative reset times of a startup snapshot onto now: they were measured
+ * relative to the moment the snapshot was saved, while every consumer (window labels,
+ * forecast cap, the quota reconciliation window) treats them as relative to now. Without
+ * the rebase, a snapshot loaded hours later stretches the quota window by its age and
+ * compares local credits against the wrong period. Floors at 0 — a window that has since
+ * reset reads as "resets now", never as negative.
+ */
+export function rebaseSnapshotResets(
+  resets: { resetIn5h: number; resetIn7d: number },
+  savedAtMs: number,
+  nowMs: number,
+): { resetIn5h: number; resetIn7d: number } {
+  const elapsedSec = Math.max(0, (nowMs - savedAtMs) / 1000);
+  return {
+    resetIn5h: Math.max(0, resets.resetIn5h - elapsedSec),
+    resetIn7d: Math.max(0, resets.resetIn7d - elapsedSec),
+  };
+}

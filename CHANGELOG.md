@@ -9,6 +9,47 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Peak-hour indicator ⚡ for z.ai accounts.** z.ai charges double during its peak
+  window — UTC weekdays 06:00–10:00 (14:00–18:00 SGT). While the window is active the
+  status bar shows a ⚡ segment (z.ai only) with the local "peak until …" time in the
+  tooltip; every off-peak turn is billed at half price in the credit totals.
+- **z.ai credits as a first-class unit (§).** Costs are now also aggregated in z.ai
+  credits using the official formula
+  `(input × M_in + cache_read × M_cache + output × M_out) / 10000` — multipliers
+  6.9 / 1.7 / 24 for GLM and 2.3 / 0.56 / 8 for Flash models, halved off-peak by each
+  turn's own timestamp. Only GLM turns earn credits; `claude-*` and unknown models never
+  do. The new setting `claudeStatus.display.primaryUnit` (`auto | credits | usd`,
+  default `auto`) picks the unit of the status-bar cost segment — `auto` means credits
+  for z.ai and USD for everyone else.
+- **Context-fill segment for the active session.** When the current workspace has a
+  session with a turn newer than 6 hours, the status bar shows `ctx NN%` (⚠ from
+  20k tokens below the model's window) computed from the last turn of that session.
+- **"Now" panel on the dashboard.** The former CURRENT USAGE card now shows the absolute
+  5-hour reset time, a ⚡ mark in the peak window, the burn rate in both units
+  ("412 cr/h · $1.42/h") and a reconciliation line "local §X · by quota §Y over 5h" —
+  locally counted credits over the quota-aligned window versus the quota's own `used`,
+  which surfaces tariff drift between the extension's multipliers and z.ai's.
+- **Dual-unit prediction.** The forecast engine computes USD/hour and credits/hour in one
+  pass; for z.ai accounts with a live credit quota the exhaustion forecast is built from
+  the remaining credits, capped at the 5-hour reset, and says so when the window will not
+  be exhausted before the reset.
+- **Subagent logs are counted.** Session files under `<session>/subagents/*.jsonl` now
+  join the walk (same safety gates as top-level files), so their cost and credits appear
+  in all aggregates, the burn rate included. Session counting and the active-session
+  lookup still use top-level files only.
+- **GLM-5.3 pricing.** `glm-5.3` and `glm-5.3-flash` are priced per the official z.ai
+  rate card instead of matching the outdated `glm-5` prefix, so the USD half of the
+  display stops understating these models.
+
+### Changed
+
+- **Dollar aggregates of every provider will jump upward after this update.** This is
+  deliberate: subagent transcripts (59 % of credit spend in a live-log sample) were
+  previously invisible to the cost totals, and now they are counted. The higher numbers
+  are the correct ones — the old totals silently omitted subagent work.
+
 ### Fixed
 
 - **A switched GLM/Claude key left the old account's quota on screen after a VS Code restart.**

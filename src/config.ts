@@ -3,6 +3,48 @@ import type { ClaudeProvider } from './data/apiClient';
 import type { TokenPricing } from './data/jsonlReader';
 import type { RateLimitThresholds } from './data/notificationDecision';
 
+/** Value of `claudeStatus.display.primaryUnit` as the user set it. */
+export type PrimaryUnitSetting = 'auto' | 'credits' | 'usd';
+
+/** Resolved display unit: credits exist only for the z.ai credit tariff. */
+export type PrimaryUnit = 'credits' | 'usd';
+
+/**
+ * Resolve the primary cost-display unit. `auto` follows the provider (credits for z-ai,
+ * dollars for everyone else); an explicit `credits` is defined only for z-ai and degrades
+ * to dollars elsewhere — no other provider has a credit tariff to convert to. An unknown
+ * setting value (hand-edited settings.json) reads as `auto`, the declared default, so both
+ * non-usd settings resolve through the same provider check.
+ */
+export function resolvePrimaryUnit(providerType: ClaudeProvider, setting: PrimaryUnitSetting): PrimaryUnit {
+  if (setting === 'usd') { return 'usd'; }
+  return providerType === 'z-ai' ? 'credits' : 'usd';
+}
+
+/**
+ * Credits with the § marker, compact like formatTokens: whole numbers below 1k, then
+ * `§2.8k` / `§1.2M` / `§1.0B` / `§1.0T`. § is one glyph, never confused with $, and present
+ * in the monospace status-bar fonts. Non-finite or negative inputs render as §0 (fail-soft:
+ * the status bar must not print §NaN). A value whose mantissa would round up to 1000.0
+ * moves into the next tier, so §1000.0k / §1000.0M never print.
+ */
+export function formatCredits(n: number): string {
+  if (!Number.isFinite(n) || n < 0) { return '§0'; }
+  const r = Math.round(n);
+  if (r < 1_000) { return `§${r}`; }
+  // Numeric thresholds, not string-matching toFixed output: toFixed(1) rounds the
+  // mantissa up to "1000.0" from 999.95 of a tier's unit onwards.
+  const compact = (div: number, suffix: string): string | null =>
+    r / div < 999.95 ? `§${(r / div).toFixed(1)}${suffix}` : null;
+  return compact(1_000, 'k')
+    ?? compact(1_000_000, 'M')
+    ?? compact(1_000_000_000, 'B')
+    ?? compact(1_000_000_000_000, 'T')
+    // Past 999.95T no higher tier exists; exponential keeps the bounded-mantissa
+    // invariant (toFixed would print "1000.0T", and at ≥1e33 an "1e+21" style string).
+    ?? `§${(r / 1_000_000_000_000).toExponential(1)}T`;
+}
+
 export class ExtensionConfig {
   private get cfg() {
     return vscode.workspace.getConfiguration('claudeStatus');
@@ -10,6 +52,12 @@ export class ExtensionConfig {
 
   get displayMode(): 'percent' | 'cost' {
     return this.cfg.get('displayMode', 'percent');
+  }
+
+  /** Raw `claudeStatus.display.primaryUnit` value; resolvePrimaryUnit applies it per provider. */
+  get primaryUnitSetting(): PrimaryUnitSetting {
+    const v = this.cfg.get<PrimaryUnitSetting>('display.primaryUnit', 'auto');
+    return v === 'credits' || v === 'usd' ? v : 'auto';
   }
 
   get statusBarAlignment(): 'left' | 'right' {

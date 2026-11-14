@@ -85,6 +85,21 @@
           "default": "percent",
           "description": "%config.displayMode.desc%"
         },
+        "claudeStatus.display.primaryUnit": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "credits",
+            "usd"
+          ],
+          "enumDescriptions": [
+            "%config.display.primaryUnit.auto%",
+            "%config.display.primaryUnit.credits%",
+            "%config.display.primaryUnit.usd%"
+          ],
+          "default": "auto",
+          "description": "%config.display.primaryUnit.desc%"
+        },
         "claudeStatus.statusBar.alignment": {
           "type": "string",
           "enum": [

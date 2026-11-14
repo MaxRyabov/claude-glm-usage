@@ -204,4 +204,24 @@ suite('runtime strings reach the bundles', () => {
       assert.ok(translated.includes(title), `${lang}: ${JSON.stringify(translated)} must contain ${JSON.stringify(title)}`);
     }
   });
+
+  test('the stage-4 dashboard keys ship in every bundle, and the retired title is gone', () => {
+    // Positive control for add-statusbar-peak-ctx-units §4: the generic scanner covers the
+    // code→bundle direction; this pins the stage's keys explicitly, including the removal
+    // of the card title the Now panel replaced.
+    const stage4 = [
+      'Now',
+      '{0} cr/hr',
+      'local {0} · quota {1} over 5h',
+      '5h credits left',
+      'The 5h window will not be exhausted before the reset.',
+    ];
+    for (const lang of BUNDLE_LOCALES) {
+      const bundle = new Set(readKeys(`l10n/bundle.l10n.${lang}.json`));
+      for (const key of stage4) {
+        assert.ok(bundle.has(key), `bundle.l10n.${lang}.json lacks the stage-4 key ${JSON.stringify(key)}`);
+      }
+      assert.ok(!bundle.has('Current Usage'), `bundle.l10n.${lang}.json still ships the retired 'Current Usage' key`);
+    }
+  });
 });
