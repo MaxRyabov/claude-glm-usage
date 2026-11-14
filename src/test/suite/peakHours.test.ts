@@ -1,5 +1,8 @@
 import * as assert from 'assert';
+import { execFileSync } from 'child_process';
+import * as path from 'path';
 import { isPeakAt, peakStatus } from '../../data/peakHours';
+import type { PeakStatus } from '../../data/peakHours';
 
 // Fixed dates: 2026-11-09 is a Monday, 2026-11-14/15 — Saturday/Sunday.
 // Date.UTC months are 0-based — name them instead of repeating bare indices.
@@ -14,16 +17,45 @@ const TUE_11 = new Date(utc(NOV, 10, 11));
 const FRI_11 = new Date(utc(NOV, 13, 11));
 const SAT_07 = new Date(utc(NOV, 14, 7));
 
-// Independent default-zone (machine) formatters — deliberately no shared code with
-// peakStatus: they pin that an omitted/invalid timeZone selects the machine zone, not
-// a hardcoded UTC (the two differ on any non-UTC host and coincide on a UTC one).
-// Both are zone-free (machine default), so the instances are invariant — build once.
-const machineHhMmFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-const machineTzFmt = new Intl.DateTimeFormat('en', { timeZoneName: 'shortOffset' });
-const machineHhMm = (ms: number): string => machineHhMmFmt.format(new Date(ms));
-const machineTzLabel = (ms: number): string =>
-  (machineTzFmt.formatToParts(new Date(ms))
-    .find((p) => p.type === 'timeZoneName')?.value ?? '').replace(/^GMT/, 'UTC');
+// Independent machine-zone expectations — built via getTimezoneOffset (non-Intl V8
+// path), deliberately independent from the Intl-based implementation: no Intl call
+// participates, so changing the formatter config in peakStatus cannot move these
+// expectations in lock-step (which would turn the pin into a tautology). They pin
+// that an omitted/invalid timeZone selects the machine zone, not a hardcoded UTC
+// (the two differ on any non-UTC host and coincide on a UTC one).
+const machineOffsetMin = (ms: number): number => -new Date(ms).getTimezoneOffset();
+const machineHhMm = (ms: number): string => {
+  // Shift the moment to machine wall time and read it as UTC — no zone rendering.
+  const wall = new Date(ms + machineOffsetMin(ms) * 60_000);
+  return `${String(wall.getUTCHours()).padStart(2, '0')}:${String(wall.getUTCMinutes()).padStart(2, '0')}`;
+};
+// Same label contract as tzLabel: "UTC" at zero, otherwise "UTC±H[:MM]".
+const machineTzLabel = (ms: number): string => {
+  const off = machineOffsetMin(ms);
+  if (off === 0) { return 'UTC'; }
+  const sign = off < 0 ? '-' : '+';
+  const abs = Math.abs(off);
+  const h = Math.floor(abs / 60);
+  const mm = abs % 60;
+  return `UTC${sign}${h}${mm === 0 ? '' : `:${String(mm).padStart(2, '0')}`}`;
+};
+
+// The machine-zone fallback cannot be TZ-pinned in-process (mutating process.env.TZ
+// before the first Date use only works on Linux; the runner's zone is whatever the
+// host machine has — on a UTC CI host the fallback is indistinguishable from a
+// hardcoded UTC). A fresh child node reads TZ from its environment at startup, so
+// the probe below runs the compiled module under TZ=Europe/Moscow and reports both
+// the omitted-timeZone and the invalid-timeZone results. The module path is resolved
+// from this test file's __dirname (out/test/suite → out/data), never hardcoded.
+// ELECTRON_RUN_AS_NODE makes the extension-host binary (VS Code) behave as plain
+// node inside the child; harmless when execPath already is node.
+const childProbeScript = `
+  const { peakStatus } = require(${JSON.stringify(path.join(__dirname, '..', '..', 'data', 'peakHours'))});
+  const now = new Date(${utc(NOV, 9, 7)});
+  const machine = peakStatus(now, 'z-ai');
+  const invalid = peakStatus(now, 'z-ai', 'Mars/Olympus_Mons');
+  process.stdout.write(JSON.stringify({ machine, invalid }));
+`;
 
 suite('isPeakAt (UTC weekdays 06:00–10:00)', () => {
   test('weekday inside the window is peak', () => {
@@ -162,5 +194,29 @@ suite('peakStatus', () => {
     assert.strictEqual(st.windowStartLocal, machineHhMm(st.windowStartMs));
     assert.strictEqual(st.tzLabel, machineTzLabel(st.windowStartMs));
     assert.match(st.tzLabel, /^UTC(?:[+-]\d{1,2}(?::\d{2})?)?$/);
+  });
+
+  test('machine-zone fallback pinned in a TZ-isolated child: Moscow clock, not hardcoded UTC', () => {
+    // The child runs under TZ=Europe/Moscow (MSK = UTC+3 in November), which the
+    // in-process tests above cannot force. On a UTC CI host this is exactly the
+    // case that used to be a blind spot: machine zone and hardcoded UTC coincide
+    // there, while the child's Moscow zone tells them apart.
+    const out = execFileSync(process.execPath, ['-e', childProbeScript], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, TZ: 'Europe/Moscow', ELECTRON_RUN_AS_NODE: '1' },
+    });
+    const { machine, invalid } = JSON.parse(out) as { machine: PeakStatus | null; invalid: PeakStatus | null };
+    assert.ok(machine, 'omitted timeZone must still produce a status');
+    assert.ok(invalid, 'invalid timeZone must not throw out of peakStatus');
+    // The invalid zone falls back to the machine zone: identical payloads.
+    assert.deepStrictEqual(invalid, machine, 'invalid tz result equals the machine-zone result');
+    // Machine zone is Moscow in November: the window renders on the MSK clock.
+    assert.strictEqual(machine.tzLabel, 'UTC+3');
+    assert.strictEqual(machine.windowStartLocal, '09:00');   // 06:00 UTC + 3h
+    // A hardcoded-UTC regression would render 'UTC'/'06:00' — pin them non-equal so
+    // the fallback stays observable even when the parent process itself runs on UTC.
+    assert.notStrictEqual(machine.tzLabel, 'UTC');
+    assert.notStrictEqual(machine.windowStartLocal, '06:00');
   });
 });
