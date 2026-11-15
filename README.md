@@ -160,9 +160,10 @@ Additional segments (z.ai accounts get the most out of them):
 - **§ credits as a cost unit** — cost segments can show z.ai credits instead of dollars
   in compact notation: a rounded integer below 1000 (`§742`), from 1000 one decimal
   with a suffix — always one decimal per tier (`§1.0k`, `§2.8k`, `§1.0M`, never `§1M`);
-  anything that rounds up to 1000 lands in the next tier (999.6 → `§1.0k`). The unit
-  is picked by `claudeStatus.display.primaryUnit`: `auto` (default) means credits on
-  z.ai and USD everywhere else.
+  values from 999.5 — the first that rounds to 1000 — print in tier form (`§1.0k`).
+  The unit of every cost display is picked by `claudeStatus.display.primaryUnit`:
+  `auto` (default) means credits on z.ai and USD everywhere else, and an explicit
+  `credits` also degrades to USD on non-z.ai providers.
 
 ### 🗂 Dashboard Panel
 
