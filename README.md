@@ -94,20 +94,23 @@ The extension then auto-detects z.ai and:
 - **counts costs in z.ai credits (§) as well** — with the z.ai rate-card formula
   `(input × 6.9 + cache_read × 1.7 + output × 24) / 10000` credits. The terms are raw
   token counts from the session log; the multipliers are z.ai's credit rates per 10k
-  tokens — input 6.9 / cache-read 1.7 / output 24, applied to every non-flash GLM model
-  (4.x and 5.x alike — the set follows the GLM-5.3 card; if z.ai prices other
-  generations differently, the dashboard's reconciliation line will surface the drift);
-  every flash tier uses input 2.3 / cache-read 0.56 / output 8
-  (~3× cheaper). These are the peak-hour rates — outside the peak window each turn is
-  billed at half of them, by the turn's own timestamp. Worked example: 100k input +
-  200k cache-read + 50k output in peak = (100000×6.9 + 200000×1.7 + 50000×24) / 10000
-  = §223. Cache-creation tokens are not billed separately: z.ai folds cache writes
-  into the input term, so the formula has no cache-create term. Credits are earned by
-  GLM-family models wherever they run; `claude-*` and unknown models never earn any.
-  The credit multipliers are built in — `claudeStatus.pricing.models` overrides USD
-  prices only. The § unit itself shows on z.ai accounts — see
-  `claudeStatus.display.primaryUnit` below. Multipliers follow the published GLM-5.3
-  rate card ([z.ai pricing](https://docs.z.ai/guides/overview/pricing)) and may change.
+  tokens, and they are the peak-hour rates — outside the peak window each turn is
+  billed at half of them, by the turn's own timestamp.
+  - Rates by tier: every non-flash GLM model (4.x and 5.x alike — the set follows the
+    GLM-5.3 card; if z.ai prices other generations differently, the dashboard's
+    reconciliation line will surface the drift) uses input 6.9 / cache-read 1.7 /
+    output 24; every flash tier uses input 2.3 / cache-read 0.56 / output 8
+    (~3× cheaper).
+  - Worked example: 100k input + 200k cache-read + 50k output in peak =
+    (100000×6.9 + 200000×1.7 + 50000×24) / 10000 = §223.
+  - Cache-creation tokens are not billed separately: z.ai folds cache writes into
+    the input term, so the formula has no cache-create term.
+  - Credits are earned by GLM-family models wherever they run; `claude-*` and unknown
+    models never earn any. The credit multipliers are built in —
+    `claudeStatus.pricing.models` overrides USD prices only. The § unit itself shows
+    on z.ai accounts — see `claudeStatus.display.primaryUnit` below. Multipliers
+    follow the published GLM-5.3 rate card
+    ([z.ai pricing](https://docs.z.ai/guides/overview/pricing)) and may change.
 
 Other Anthropic-compatible providers (AWS Bedrock, direct API key, custom endpoints) are
 supported too — cost-only, priced from local JSONL. See [Provider Compatibility](#provider-compatibility).
@@ -153,8 +156,9 @@ Additional segments (z.ai accounts get the most out of them):
   shows for other providers.
 - **`ctx NN%` context fill** — how full the active session's context window is, computed
   from that session's last turn (⚠ once fewer than 20k tokens remain to the model's
-  window). Shown when the current workspace has a session with a turn newer than 6 hours;
-  both thresholds are fixed and not configurable. The share is not clamped: `ctx 104%`
+  window). Shown when the current workspace has a session whose latest turn is less
+  than 6 hours old; both thresholds are fixed and not configurable. The share is not
+  clamped: `ctx 104%`
   means the transcript has already outgrown the model's window — expect Claude Code to
   compact it.
 - **§ credits as a cost unit** — cost segments can show z.ai credits instead of dollars
