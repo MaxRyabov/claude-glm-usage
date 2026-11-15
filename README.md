@@ -100,7 +100,7 @@ The extension then auto-detects z.ai and:
   every flash tier uses input 2.3 / cache-read 0.56 / output 8
   (~3× cheaper). These are the peak-hour rates — outside the peak window each turn is
   billed at half of them, by the turn's own timestamp. Worked example: 100k input +
-  200k cache-read + 50k output in peak ≈ (100000×6.9 + 200000×1.7 + 50000×24) / 10000
+  200k cache-read + 50k output in peak = (100000×6.9 + 200000×1.7 + 50000×24) / 10000
   = §223. Cache-creation tokens are not billed separately: z.ai folds cache writes
   into the input term, so the formula has no cache-create term. Credits are earned by
   GLM-family models wherever they run; `claude-*` and unknown models never earn any.
