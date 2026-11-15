@@ -86,13 +86,19 @@ The extension then auto-detects z.ai and:
   tier. Falls back to cost-only if no token is found — and if z.ai **rejects** the key, the status
   bar says so instead of showing a misleading 0 %.
 - **prices each entry by its GLM model** using a built-in GLM price table (GLM-5.3 and
-  GLM-5.3-Flash per the official z.ai rate card) — so cost is accurate
-  instead of Claude's ~5–7× higher rates. Override or add model rates with
-  `claudeStatus.pricing.models`.
-- **counts costs in z.ai credits (§) as well** — with the official formula
-  `(input × 6.9 + cache_read × 1.7 + output × 24) / 10000` for GLM models (Flash ~3×
-  cheaper), halved off-peak by each turn's own timestamp. Only GLM turns earn credits;
-  `claude-*` and unknown models never do.
+  GLM-5.3-Flash per the official z.ai rate card) — so cost tracks the real GLM rates
+  instead of Claude's ~5–7× higher ones (still an estimate, like every cost figure here).
+  Override or add model rates with `claudeStatus.pricing.models`.
+- **counts costs in z.ai credits (§) as well** — with the z.ai rate-card formula
+  `(input × 6.9 + cache_read × 1.7 + output × 24) / 10000` for GLM-5.3 models; the flash
+  tier is ~3× cheaper (2.3 / 0.56 / 8). These multipliers are the peak-hour rates —
+  outside the peak window each turn is billed at half of them, by the turn's own
+  timestamp. Cache-creation tokens are not billed separately: z.ai folds cache writes
+  into the input term, so the formula has no cache-create term. Credits are earned by
+  GLM-family models (including every flash tier) wherever they run; `claude-*` and
+  unknown models never earn any. The § unit itself shows on z.ai accounts — see
+  `claudeStatus.display.primaryUnit` below. Multipliers follow the published GLM-5.3
+  rate card ([z.ai pricing](https://docs.z.ai/guides/overview/pricing)) and may change.
 
 Other Anthropic-compatible providers (AWS Bedrock, direct API key, custom endpoints) are
 supported too — cost-only, priced from local JSONL. See [Provider Compatibility](#provider-compatibility).
@@ -134,11 +140,13 @@ Additional segments (z.ai accounts get the most out of them):
 - **⚡ peak indicator** — z.ai charges double during its peak window (UTC weekdays
   06:00–10:00, i.e. 14:00–18:00 SGT). While it is active a ⚡ segment appears next to the
   quota windows and the tooltip shows the local "peak until …" time; every off-peak turn
-  is billed at half price in the credit totals. z.ai only — the mark never shows for other
-  providers.
+  is billed at half the formula's rates in the credit totals. z.ai only — the mark never
+  shows for other providers.
 - **`ctx NN%` context fill** — how full the active session's context window is, computed
   from that session's last turn (⚠ once fewer than 20k tokens remain to the model's
   window). Shown when the current workspace has a session with a turn newer than 6 hours.
+  The share is not clamped: `ctx 104%` means the transcript has already outgrown the
+  model's window — expect Claude Code to compact it.
 - **§ credits as a cost unit** — cost segments can show z.ai credits instead of dollars
   in compact notation (`§742` under 1000, `§2.8k` above). The unit is picked by
   `claudeStatus.display.primaryUnit`: `auto` (default) means credits on z.ai and USD
@@ -149,12 +157,12 @@ Additional segments (z.ai accounts get the most out of them):
 Click the status bar item to open a rich dashboard panel with:
 
 - **Current Usage** — colour-coded progress bars for 5 h and 7 d windows; the window that
-  reaches its limit turns red. Shows the absolute 5-hour reset time; on z.ai a ⚡ mark
-  appears during the peak window. On credit-based z.ai plans each bar also shows the credits
-  used, the total and what is left, with your plan tier next to the title, plus a
-  reconciliation line "local §X · by quota §Y over 5h" — locally counted credits over the
-  quota-aligned window versus the quota's own `used`, which surfaces tariff drift between
-  the extension's multipliers and z.ai's
+  reaches its limit turns red. Shows the absolute 5-hour reset time. On z.ai a ⚡ mark
+  appears during the peak window. On credit-based z.ai plans each bar also shows the
+  credits used, the total and what is left, with your plan tier next to the title. A
+  reconciliation line "local §X · by quota §Y over 5h" compares locally counted credits
+  with the quota's own `used` — a mismatch means the extension's multipliers have drifted
+  from z.ai's rates
 - **Token Cost** — 5 h / today / 7 d / month (est.) costs; expandable **token breakdown**
   shows per-type counts (input / output / cache read / cache create) with individual costs
   and cache hit ratio. Subagent transcripts (`<session>/subagents/*.jsonl`) are counted in
@@ -292,7 +300,7 @@ All settings are under the `claudeStatus` namespace in VS Code Settings.
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `claudeStatus.displayMode` | `"percent"` \| `"cost"` | `"percent"` | Status bar display mode |
-| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | Unit of the cost display: z.ai credits (§) or USD. `auto` = credits on z.ai, USD elsewhere |
+| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | Unit of every cost display (cost-mode windows, project-cost segment, cost tooltips): z.ai credits (§) or USD. `auto` = credits on z.ai, USD elsewhere; an explicit `credits` also degrades to USD on non-z.ai providers |
 | `claudeStatus.statusBar.alignment` | `"left"` \| `"right"` | `"left"` | Status bar position |
 | `claudeStatus.statusBar.showProjectCost` | `boolean` | `true` | Show project cost in status bar |
 | `claudeStatus.cache.ttlSeconds` | `number` (60–3600) | `300` | API cache TTL in seconds |

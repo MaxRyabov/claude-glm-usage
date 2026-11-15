@@ -63,18 +63,23 @@
 | 超出模型上下文窗口 | `🤖 5h:45% 7d:62% ctx 104%⚠` |
 | 缓存过期 | `🤖 5h:78% 7d:84% [10m ago]` |
 | 未登录 | `🤖 Not logged in` |
+| Claude 登录被拒（401 或未知状态） | `🤖 Login rejected` |
+| Claude 拒绝访问（403） | `🤖 Access refused` |
+| Claude 登录过期且无缓存 | `🤖 Login expired` |
+| z.ai 拒绝 API 密钥 | `🤖 API key rejected` |
 
 悬停可查看包含完整令牌明细和重置时间的详细提示。
 
 附加段（对 z.ai 账户最有价值）：
 
-- **⚡ 高峰指示器** — z.ai 在自家高峰时段（UTC 工作日 06:00–10:00，即 SGT
-  14:00–18:00）按双倍计费。高峰期间配额窗口旁会显示 ⚡ 段，提示中给出本地时间的
-  「高峰期至 …」；高峰外的每个回合在积分合计中按半价计费。仅限 z.ai，其他提供商
-  永远不会显示该标记。
+- **⚡ 高峰指示器** — z.ai 在自家高峰时段（UTC 工作日 06:00–10:00，即新加坡时间
+  SGT 14:00–18:00）按双倍计费。高峰期间配额窗口旁会显示 ⚡ 段，提示中给出本地时间的
+  「高峰期至 …」；积分公式的乘数为高峰时段的全额费率，高峰外的回合按半价计入
+  积分合计。仅限 z.ai，其他提供商永远不会显示该标记。
 - **`ctx NN%` 上下文占用** — 活跃会话上下文窗口的占用比例（按该会话最后一个回合
   计算，距模型窗口不足 20k 令牌时显示 ⚠）。当前工作区存在回合时间在 6 小时内的
-  会话时显示。
+  会话时显示。占比不做截断：`ctx 104%` 表示转录已超出模型窗口——即将触发
+  Claude Code 的压缩（compaction）。
 - **§ 积分作为费用单位** — 费用段可以显示 z.ai 积分代替美元，采用紧凑记法（1000
   以下为 `§742`，以上为 `§2.8k`）。单位由 `claudeStatus.display.primaryUnit`
   选择：默认 `auto` 表示 z.ai 用积分、其他提供商用 USD。
@@ -223,7 +228,7 @@ npm run package       # → claude-glm-usage-*.vsix
 | 设置 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `claudeStatus.displayMode` | `"percent"` \| `"cost"` | `"percent"` | 状态栏显示模式 |
-| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | 费用显示单位：z.ai 积分（§）或 USD。`auto` = z.ai 用积分，其余用 USD |
+| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | 所有费用显示（费用模式窗口、项目费用段、费用提示）的单位：z.ai 积分（§）或 USD。`auto` = z.ai 用积分，其余用 USD；显式 `credits` 在非 z.ai 提供商下同样回退为 USD |
 | `claudeStatus.statusBar.alignment` | `"left"` \| `"right"` | `"left"` | 状态栏位置 |
 | `claudeStatus.statusBar.showProjectCost` | `boolean` | `true` | 在状态栏显示项目费用 |
 | `claudeStatus.cache.ttlSeconds` | `number` (60–3600) | `300` | API 缓存 TTL（秒） |
@@ -247,9 +252,13 @@ npm run package       # → claude-glm-usage-*.vsix
 > **z.ai（GLM）**: 在 `~/.claude/settings.json` 中将 `env.ANTHROPIC_BASE_URL` 设为
 > `https://api.z.ai/api/anthropic` 后，扩展会自动检测提供商，显示 z.ai 的 5 小时／每周配额
 > （与订阅页面相同的使用率 %），并按每条记录的 `message.model` 使用 GLM 价格表计费
-> （GLM-5.3 / GLM-5.3-Flash 按 z.ai 官方价目表）。费用同时按官方公式
-> `(输入 × 6.9 + 缓存读取 × 1.7 + 输出 × 24) / 10000` 以 z.ai 积分（§）累计，高峰外的
-> 回合按半价计费（Flash 约为三分之一）；若未配置令牌则回退为仅显示费用。
+> （GLM-5.3 / GLM-5.3-Flash 按 z.ai 官方价目表）。费用同时按 z.ai 价目卡公式
+> `(输入 × 6.9 + 缓存读取 × 1.7 + 输出 × 24) / 10000`（GLM-5.3；Flash 为
+> 2.3 / 0.56 / 8，约三分之一）以 z.ai 积分（§）累计。该乘数为高峰时段的
+> 全额费率，高峰外的回合按回合自身的时间戳以半价计费。缓存创建令牌不单独
+> 计费——z.ai 将其计入输入项，因此公式中没有 cache-create 项。积分只对 GLM 系
+> 模型（含全部 flash 层级）累计，与端点无关；`claude-*` 和未知模型不计积分。
+> 乘数基于 GLM-5.3 公开价目卡，可能随调整变化；若未配置令牌则回退为仅显示费用。
 
 ```jsonc
 // 示例: settings.json
