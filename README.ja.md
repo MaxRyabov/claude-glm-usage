@@ -41,7 +41,8 @@
 > 料金変更を即座に反映しない可能性があります。
 > 料金が変更された場合は `claudeStatus.pricing.*` 設定を更新してください
 > （この設定は USD 単価を対象とし、z.ai クレジット乗数は内蔵です — 下のクレジット式を参照）。
-> 最新の料金は [Anthropic 料金ページ](https://www.anthropic.com/pricing) でご確認ください。
+> 最新の料金は [Anthropic 料金ページ](https://www.anthropic.com/pricing) ·
+> [z.ai 料金ページ](https://docs.z.ai/guides/overview/pricing) でご確認ください。
 
 ---
 

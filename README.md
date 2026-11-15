@@ -23,8 +23,7 @@ A Visual Studio Code extension that monitors your coding-agent usage in real tim
 It reads session data from `~/.claude/projects/` locally (no extra network calls) and shows
 live utilization, cost, and rate-limit quota right in the status bar, with a rich dashboard
 one click away. Every token is priced **per model** — Claude *and* GLM rates are built in — so
-cost follows each model's real rates even when you mix providers in the same session
-(still an estimate, like every cost figure).
+cost follows each model's real rates even when you mix providers in the same session.
 
 <div align="center">
 

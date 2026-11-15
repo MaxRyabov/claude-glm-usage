@@ -37,7 +37,8 @@
 > [!WARNING]
 > **费用数据为估算值。** 默认单价基于实现时 Anthropic 的公开定价，可能不反映最新变化。
 > 如定价有变，请更新 `claudeStatus.pricing.*` 设置以匹配
-> [Anthropic 定价页面](https://www.anthropic.com/pricing) 的最新费率
+> [Anthropic 定价页面](https://www.anthropic.com/pricing) ·
+> [z.ai 定价页面](https://docs.z.ai/guides/overview/pricing) 的最新费率
 > （该设置针对美元单价；z.ai 积分乘数为内置常量，见下方积分公式）。
 
 ---
