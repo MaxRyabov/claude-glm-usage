@@ -23,7 +23,8 @@ A Visual Studio Code extension that monitors your coding-agent usage in real tim
 It reads session data from `~/.claude/projects/` locally (no extra network calls) and shows
 live utilization, cost, and rate-limit quota right in the status bar, with a rich dashboard
 one click away. Every token is priced **per model** — Claude *and* GLM rates are built in — so
-cost is accurate even when you mix providers in the same session.
+cost follows each model's real rates even when you mix providers in the same session
+(still an estimate, like every cost figure).
 
 <div align="center">
 
@@ -103,8 +104,8 @@ The extension then auto-detects z.ai and:
     (~3× cheaper).
   - Worked example: 100k input + 200k cache-read + 50k output in peak =
     (100000×6.9 + 200000×1.7 + 50000×24) / 10000 = §223.
-  - Cache-creation tokens are not billed separately: z.ai folds cache writes into
-    the input term, so the formula has no cache-create term.
+  - Cache-creation tokens are not counted in the credit formula — the coding-plan
+    rate card has no separate cache-write term.
   - Credits are earned by GLM-family models wherever they run; `claude-*` and unknown
     models never earn any. The credit multipliers are built in —
     `claudeStatus.pricing.models` overrides USD prices only. The § unit itself shows
