@@ -80,8 +80,9 @@
   计算，距模型窗口不足 20k 令牌时显示 ⚠）。当前工作区存在回合时间在 6 小时内的
   会话时显示。占比不做截断：`ctx 104%` 表示转录已超出模型窗口——即将触发
   Claude Code 的压缩（compaction）。
-- **§ 积分作为费用单位** — 费用段可以显示 z.ai 积分代替美元，采用紧凑记法（1000
-  以下为 `§742`，以上为 `§2.8k`）。单位由 `claudeStatus.display.primaryUnit`
+- **§ 积分作为费用单位** — 费用段可以显示 z.ai 积分代替美元，采用紧凑记法：
+  1000 以下为取整数值（`§742`），自 1000 起为一位小数加后缀（`§1.0k`、`§2.8k`、
+  `§1.2M`）。单位由 `claudeStatus.display.primaryUnit`
   选择：默认 `auto` 表示 z.ai 用积分、其他提供商用 USD。
 
 ### 🗂 仪表板面板
@@ -253,17 +254,24 @@ npm run package       # → claude-glm-usage-*.vsix
 > `https://api.z.ai/api/anthropic` 后，扩展会自动检测提供商，显示 z.ai 的 5 小时／每周配额
 > （与订阅页面相同的使用率 %），并按每条记录的 `message.model` 使用 GLM 价格表计费
 > （GLM-5.3 / GLM-5.3-Flash 按 z.ai 官方价目表）。费用同时按 z.ai 价目卡公式
-> `(输入 × 6.9 + 缓存读取 × 1.7 + 输出 × 24) / 10000`（GLM-5.3；Flash 为
-> 2.3 / 0.56 / 8，约三分之一）以 z.ai 积分（§）累计。该乘数为高峰时段的
-> 全额费率，高峰外的回合按回合自身的时间戳以半价计费。缓存创建令牌不单独
-> 计费——z.ai 将其计入输入项，因此公式中没有 cache-create 项。积分只对 GLM 系
-> 模型（含全部 flash 层级）累计，与端点无关；`claude-*` 和未知模型不计积分。
-> 乘数基于 GLM-5.3 公开价目卡，可能随调整变化；若未配置令牌则回退为仅显示费用。
+> `(输入 × 6.9 + 缓存读取 × 1.7 + 输出 × 24) / 10000` 积分以 z.ai 积分（§）累计。
+> 各项为会话日志中的原始令牌数；乘数为每 10k 令牌的积分单价——输入 6.9 /
+> 缓存读取 1.7 / 输出 24，适用于所有非 flash 的 GLM 模型（4.x 与 5.x 相同）；
+> 全部 flash 层级为输入 2.3 / 缓存读取 0.56 / 输出 8（约三分之一）。该乘数为
+> 高峰时段的全额费率，高峰外的回合按回合自身的时间戳以半价计费。计算示例：
+> 高峰时段 输入 100k + 缓存读取 200k + 输出 50k ≈ (100000×6.9 + 200000×1.7 +
+> 50000×24) / 10000 = §223。缓存创建令牌不单独计费——z.ai 将其计入输入项，
+> 因此公式中没有 cache-create 项。积分只对 GLM 系模型累计，与端点无关；
+> `claude-*` 和未知模型不计积分。积分乘数为内置常量，`claudeStatus.pricing.models`
+> 仅影响美元单价。乘数基于 GLM-5.3 公开价目卡，可能随调整变化；若未配置令牌
+> 则回退为仅显示费用。
 
 ```jsonc
 // 示例: settings.json
 {
   "claudeStatus.displayMode": "cost",
+  // 费用单位: "auto" = z.ai 用积分，其余用 USD（"credits" | "usd"）:
+  // "claudeStatus.display.primaryUnit": "auto",
   "claudeStatus.cache.ttlSeconds": 120,
   "claudeStatus.budget.dailyUsd": 5.00,
   "claudeStatus.budget.alertThresholdPercent": 80,

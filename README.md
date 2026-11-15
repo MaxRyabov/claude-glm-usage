@@ -90,13 +90,18 @@ The extension then auto-detects z.ai and:
   instead of Claude's ~5–7× higher ones (still an estimate, like every cost figure here).
   Override or add model rates with `claudeStatus.pricing.models`.
 - **counts costs in z.ai credits (§) as well** — with the z.ai rate-card formula
-  `(input × 6.9 + cache_read × 1.7 + output × 24) / 10000` for GLM-5.3 models; the flash
-  tier is ~3× cheaper (2.3 / 0.56 / 8). These multipliers are the peak-hour rates —
-  outside the peak window each turn is billed at half of them, by the turn's own
-  timestamp. Cache-creation tokens are not billed separately: z.ai folds cache writes
+  `(input × 6.9 + cache_read × 1.7 + output × 24) / 10000` credits. The terms are raw
+  token counts from the session log; the multipliers are z.ai's credit rates per 10k
+  tokens — input 6.9 / cache-read 1.7 / output 24, applied to every non-flash GLM model
+  (4.x and 5.x alike); every flash tier uses input 2.3 / cache-read 0.56 / output 8
+  (~3× cheaper). These are the peak-hour rates — outside the peak window each turn is
+  billed at half of them, by the turn's own timestamp. Worked example: 100k input +
+  200k cache-read + 50k output in peak ≈ (100000×6.9 + 200000×1.7 + 50000×24) / 10000
+  = §223. Cache-creation tokens are not billed separately: z.ai folds cache writes
   into the input term, so the formula has no cache-create term. Credits are earned by
-  GLM-family models (including every flash tier) wherever they run; `claude-*` and
-  unknown models never earn any. The § unit itself shows on z.ai accounts — see
+  GLM-family models wherever they run; `claude-*` and unknown models never earn any.
+  The credit multipliers are built in — `claudeStatus.pricing.models` overrides USD
+  prices only. The § unit itself shows on z.ai accounts — see
   `claudeStatus.display.primaryUnit` below. Multipliers follow the published GLM-5.3
   rate card ([z.ai pricing](https://docs.z.ai/guides/overview/pricing)) and may change.
 
@@ -148,7 +153,8 @@ Additional segments (z.ai accounts get the most out of them):
   The share is not clamped: `ctx 104%` means the transcript has already outgrown the
   model's window — expect Claude Code to compact it.
 - **§ credits as a cost unit** — cost segments can show z.ai credits instead of dollars
-  in compact notation (`§742` under 1000, `§2.8k` above). The unit is picked by
+  in compact notation: a rounded integer below 1000 (`§742`), from 1000 one decimal
+  with a suffix (`§1.0k`, `§2.8k`, `§1.2M`). The unit is picked by
   `claudeStatus.display.primaryUnit`: `auto` (default) means credits on z.ai and USD
   everywhere else.
 
@@ -162,11 +168,11 @@ Click the status bar item to open a rich dashboard panel with:
   credits used, the total and what is left, with your plan tier next to the title. A
   reconciliation line "local §X · by quota §Y over 5h" compares locally counted credits
   with the quota's own `used` — a mismatch means the extension's multipliers have drifted
-  from z.ai's rates
+  from z.ai's rates.
 - **Token Cost** — 5 h / today / 7 d / month (est.) costs; expandable **token breakdown**
   shows per-type counts (input / output / cache read / cache create) with individual costs
   and cache hit ratio. Subagent transcripts (`<session>/subagents/*.jsonl`) are counted in
-  all aggregates
+  all aggregates.
 - **Project Cost** — per-workspace breakdown (today / 7 days / 30 days)
 - **Prediction** — burn rate in both units ($/hr and, on z.ai, credits/hr),
   time-to-exhaustion, daily & weekly budget tracking; on z.ai accounts with a live credit
@@ -324,6 +330,8 @@ All settings are under the `claudeStatus` namespace in VS Code Settings.
 // Example: settings.json
 {
   "claudeStatus.displayMode": "cost",
+  // Cost unit: "auto" = credits on z.ai, USD elsewhere ("credits" | "usd"):
+  // "claudeStatus.display.primaryUnit": "auto",
   "claudeStatus.budget.dailyUsd": 5.00,
   "claudeStatus.statusBar.showProjectCost": true,
   // Force GLM/z.ai if auto-detect doesn't pick it up:
