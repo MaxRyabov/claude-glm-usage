@@ -9,6 +9,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [1.3.0] — 2026-11-15
+
 ### Added
 
 - **Peak-hour indicator ⚡ for z.ai accounts.** z.ai charges double during its peak
