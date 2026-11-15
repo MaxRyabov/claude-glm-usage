@@ -48,6 +48,8 @@ cost is accurate even when you mix providers in the same session.
 > at implementation time and may drift. Update `claudeStatus.pricing.*` /
 > `claudeStatus.pricing.models` to match current rates
 > ([Anthropic pricing](https://www.anthropic.com/pricing) · [z.ai pricing](https://docs.z.ai/guides/overview/pricing)).
+> These settings cover USD prices; the z.ai credit multipliers are built in (see the
+> credits formula below).
 
 ---
 
@@ -93,7 +95,9 @@ The extension then auto-detects z.ai and:
   `(input × 6.9 + cache_read × 1.7 + output × 24) / 10000` credits. The terms are raw
   token counts from the session log; the multipliers are z.ai's credit rates per 10k
   tokens — input 6.9 / cache-read 1.7 / output 24, applied to every non-flash GLM model
-  (4.x and 5.x alike); every flash tier uses input 2.3 / cache-read 0.56 / output 8
+  (4.x and 5.x alike — the set follows the GLM-5.3 card; if z.ai prices other
+  generations differently, the dashboard's reconciliation line will surface the drift);
+  every flash tier uses input 2.3 / cache-read 0.56 / output 8
   (~3× cheaper). These are the peak-hour rates — outside the peak window each turn is
   billed at half of them, by the turn's own timestamp. Worked example: 100k input +
   200k cache-read + 50k output in peak ≈ (100000×6.9 + 200000×1.7 + 50000×24) / 10000
@@ -149,14 +153,16 @@ Additional segments (z.ai accounts get the most out of them):
   shows for other providers.
 - **`ctx NN%` context fill** — how full the active session's context window is, computed
   from that session's last turn (⚠ once fewer than 20k tokens remain to the model's
-  window). Shown when the current workspace has a session with a turn newer than 6 hours.
-  The share is not clamped: `ctx 104%` means the transcript has already outgrown the
-  model's window — expect Claude Code to compact it.
+  window). Shown when the current workspace has a session with a turn newer than 6 hours;
+  both thresholds are fixed and not configurable. The share is not clamped: `ctx 104%`
+  means the transcript has already outgrown the model's window — expect Claude Code to
+  compact it.
 - **§ credits as a cost unit** — cost segments can show z.ai credits instead of dollars
   in compact notation: a rounded integer below 1000 (`§742`), from 1000 one decimal
-  with a suffix (`§1.0k`, `§2.8k`, `§1.2M`). The unit is picked by
-  `claudeStatus.display.primaryUnit`: `auto` (default) means credits on z.ai and USD
-  everywhere else.
+  with a suffix — always one decimal per tier (`§1.0k`, `§2.8k`, `§1.0M`, never `§1M`);
+  anything that rounds up to 1000 lands in the next tier (999.6 → `§1.0k`). The unit
+  is picked by `claudeStatus.display.primaryUnit`: `auto` (default) means credits on
+  z.ai and USD everywhere else.
 
 ### 🗂 Dashboard Panel
 
@@ -306,7 +312,7 @@ All settings are under the `claudeStatus` namespace in VS Code Settings.
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `claudeStatus.displayMode` | `"percent"` \| `"cost"` | `"percent"` | Status bar display mode |
-| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | Unit of every cost display (cost-mode windows, project-cost segment, cost tooltips): z.ai credits (§) or USD. `auto` = credits on z.ai, USD elsewhere; an explicit `credits` also degrades to USD on non-z.ai providers |
+| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | Unit of every cost display: z.ai credits (§) or USD (`auto` = credits on z.ai; details above) |
 | `claudeStatus.statusBar.alignment` | `"left"` \| `"right"` | `"left"` | Status bar position |
 | `claudeStatus.statusBar.showProjectCost` | `boolean` | `true` | Show project cost in status bar |
 | `claudeStatus.cache.ttlSeconds` | `number` (60–3600) | `300` | API cache TTL in seconds |

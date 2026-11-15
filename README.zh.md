@@ -37,7 +37,8 @@
 > [!WARNING]
 > **费用数据为估算值。** 默认单价基于实现时 Anthropic 的公开定价，可能不反映最新变化。
 > 如定价有变，请更新 `claudeStatus.pricing.*` 设置以匹配
-> [Anthropic 定价页面](https://www.anthropic.com/pricing) 的最新费率。
+> [Anthropic 定价页面](https://www.anthropic.com/pricing) 的最新费率
+> （该设置针对美元单价；z.ai 积分乘数为内置常量，见下方积分公式）。
 
 ---
 
@@ -78,11 +79,13 @@
   积分合计。仅限 z.ai，其他提供商永远不会显示该标记。
 - **`ctx NN%` 上下文占用** — 活跃会话上下文窗口的占用比例（按该会话最后一个回合
   计算，距模型窗口不足 20k 令牌时显示 ⚠）。当前工作区存在回合时间在 6 小时内的
-  会话时显示。占比不做截断：`ctx 104%` 表示转录已超出模型窗口——即将触发
+  会话时显示；两个阈值均为固定值，不可通过设置更改。占比不做截断：`ctx 104%`
+  表示转录已超出模型窗口——即将触发
   Claude Code 的压缩（compaction）。
 - **§ 积分作为费用单位** — 费用段可以显示 z.ai 积分代替美元，采用紧凑记法：
-  1000 以下为取整数值（`§742`），自 1000 起为一位小数加后缀（`§1.0k`、`§2.8k`、
-  `§1.2M`）。单位由 `claudeStatus.display.primaryUnit`
+  1000 以下为取整数值（`§742`），自 1000 起为一位小数加后缀，每个数量级固定
+  一位小数（`§1.0k`、`§2.8k`、`§1.0M`，不会写成 `§1M`）；向上取整到 1000 的
+  值进入下一数量级（999.6 → `§1.0k`）。单位由 `claudeStatus.display.primaryUnit`
   选择：默认 `auto` 表示 z.ai 用积分、其他提供商用 USD。
 
 ### 🗂 仪表板面板
@@ -229,7 +232,7 @@ npm run package       # → claude-glm-usage-*.vsix
 | 设置 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `claudeStatus.displayMode` | `"percent"` \| `"cost"` | `"percent"` | 状态栏显示模式 |
-| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | 所有费用显示（费用模式窗口、项目费用段、费用提示）的单位：z.ai 积分（§）或 USD。`auto` = z.ai 用积分，其余用 USD；显式 `credits` 在非 z.ai 提供商下同样回退为 USD |
+| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | 所有费用显示的单位：z.ai 积分（§）或 USD（`auto` = z.ai 用积分；详见上文） |
 | `claudeStatus.statusBar.alignment` | `"left"` \| `"right"` | `"left"` | 状态栏位置 |
 | `claudeStatus.statusBar.showProjectCost` | `boolean` | `true` | 在状态栏显示项目费用 |
 | `claudeStatus.cache.ttlSeconds` | `number` (60–3600) | `300` | API 缓存 TTL（秒） |
@@ -256,7 +259,9 @@ npm run package       # → claude-glm-usage-*.vsix
 > （GLM-5.3 / GLM-5.3-Flash 按 z.ai 官方价目表）。费用同时按 z.ai 价目卡公式
 > `(输入 × 6.9 + 缓存读取 × 1.7 + 输出 × 24) / 10000` 积分以 z.ai 积分（§）累计。
 > 各项为会话日志中的原始令牌数；乘数为每 10k 令牌的积分单价——输入 6.9 /
-> 缓存读取 1.7 / 输出 24，适用于所有非 flash 的 GLM 模型（4.x 与 5.x 相同）；
+> 缓存读取 1.7 / 输出 24，适用于所有非 flash 的 GLM 模型（4.x 与 5.x 相同——
+> 该乘数基于 GLM-5.3 价目卡；若 z.ai 对其他世代单独定价，仪表板的对账行会
+> 暴露该偏差）；
 > 全部 flash 层级为输入 2.3 / 缓存读取 0.56 / 输出 8（约三分之一）。该乘数为
 > 高峰时段的全额费率，高峰外的回合按回合自身的时间戳以半价计费。计算示例：
 > 高峰时段 输入 100k + 缓存读取 200k + 输出 50k ≈ (100000×6.9 + 200000×1.7 +
