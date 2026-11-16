@@ -23,7 +23,7 @@ A Visual Studio Code extension that monitors your coding-agent usage in real tim
 It reads session data from `~/.claude/projects/` locally (no extra network calls) and shows
 live utilization, cost, and rate-limit quota right in the status bar, with a rich dashboard
 one click away. Every token is priced **per model** — Claude *and* GLM rates are built in — so
-cost is accurate even when you mix providers in the same session.
+cost follows each model's real rates even when you mix providers in the same session.
 
 <div align="center">
 
@@ -48,6 +48,8 @@ cost is accurate even when you mix providers in the same session.
 > at implementation time and may drift. Update `claudeStatus.pricing.*` /
 > `claudeStatus.pricing.models` to match current rates
 > ([Anthropic pricing](https://www.anthropic.com/pricing) · [z.ai pricing](https://docs.z.ai/guides/overview/pricing)).
+> These settings cover USD prices; the z.ai credit multipliers are built in (see the
+> credits formula below).
 
 ---
 
@@ -85,9 +87,30 @@ The extension then auto-detects z.ai and:
   **credit-based** plans also show the credits used, the total and what is left, plus your plan
   tier. Falls back to cost-only if no token is found — and if z.ai **rejects** the key, the status
   bar says so instead of showing a misleading 0 %.
-- **prices each entry by its GLM model** using a built-in GLM price table — so cost is accurate
-  instead of Claude's ~5–7× higher rates. Override or add model rates with
-  `claudeStatus.pricing.models`.
+- **prices each entry by its GLM model** using a built-in GLM price table (GLM-5.3 and
+  GLM-5.3-Flash per the official z.ai rate card) — so cost tracks the real GLM rates
+  instead of Claude's ~5–7× higher ones (still an estimate, like every cost figure here).
+  Override or add model rates with `claudeStatus.pricing.models`.
+- **counts costs in z.ai credits (§) as well** — with the z.ai rate-card formula
+  `(input × 6.9 + cache_read × 1.7 + output × 24) / 10000` credits. The terms are raw
+  token counts from the session log; the multipliers are z.ai's credit rates per 10k
+  tokens, and they are the peak-hour rates — outside the peak window each turn is
+  billed at half of them, by the turn's own timestamp.
+  - Rates by tier: every non-flash GLM model (4.x and 5.x alike — the set follows the
+    GLM-5.3 card; if z.ai prices other generations differently, the dashboard's
+    reconciliation line will surface the drift) uses input 6.9 / cache-read 1.7 /
+    output 24; every flash tier uses input 2.3 / cache-read 0.56 / output 8
+    (~3× cheaper).
+  - Worked example: 100k input + 200k cache-read + 50k output in peak =
+    (100000×6.9 + 200000×1.7 + 50000×24) / 10000 = §223.
+  - Cache-creation tokens are not counted in the credit formula — the coding-plan
+    rate card has no separate cache-write term.
+  - Credits are earned by GLM-family models wherever they run; `claude-*` and unknown
+    models never earn any. The credit multipliers are built in —
+    `claudeStatus.pricing.models` overrides USD prices only. The § unit itself shows
+    on z.ai accounts — see `claudeStatus.display.primaryUnit` below. Multipliers
+    follow the published GLM-5.3 rate card
+    ([z.ai pricing](https://docs.z.ai/guides/overview/pricing)) and may change.
 
 Other Anthropic-compatible providers (AWS Bedrock, direct API key, custom endpoints) are
 supported too — cost-only, priced from local JSONL. See [Provider Compatibility](#provider-compatibility).
@@ -104,13 +127,17 @@ Real-time usage summary pinned to the VS Code status bar.
 |-------|---------|
 | Normal (% mode, Claude.ai Max) | `🤖 5h:45% 7d:62%` |
 | GLM / z.ai (real quota) | `🤖 5h:6% 7d:22%` |
+| z.ai peak window active (weekdays 06:00–10:00 UTC) | `🤖 5h:6% 7d:22% ⚡` |
 | Warning ≥ 75% | `🤖 5h:78%⚠ 7d:84%⚠` |
 | 5 h limit reached | `🤖 5h:100%✗ 7d:62%` |
 | Weekly limit reached | `🤖 5h:12% 7d:100%✗` |
 | 5h-only plan (no 7d window) | `🤖 5h:45%` |
 | Cost mode | `🤖 5h:$14.21 7d:$53.17` |
+| Cost mode on z.ai (credits unit) | `🤖 5h:§2.8k 7d:§9.1k` |
 | AWS Bedrock / API key (cost only) | `🤖 5h:$0.15 7d:$0.42` |
 | With project cost | `🤖 5h:78% 7d:84% \| my-app:$3.21` |
+| Active session context fill | `🤖 5h:45% 7d:62% ctx 38%` |
+| Context over the model window | `🤖 5h:45% 7d:62% ctx 104%⚠` |
 | Stale cache | `🤖 5h:78% 7d:84% [10m ago]` |
 | Not logged in | `🤖 Not logged in` |
 | Claude login rejected (401 or unknown status) | `🤖 Login rejected` |
@@ -120,19 +147,48 @@ Real-time usage summary pinned to the VS Code status bar.
 
 Hover for a detailed tooltip with full token breakdown and reset times.
 
+Additional segments (z.ai accounts get the most out of them):
+
+- **⚡ peak indicator** — z.ai charges double during its peak window (UTC weekdays
+  06:00–10:00, i.e. 14:00–18:00 SGT). While it is active a ⚡ segment appears next to the
+  quota windows and the tooltip shows the local "peak until …" time; every off-peak turn
+  is billed at half the formula's rates in the credit totals. z.ai only — the mark never
+  shows for other providers.
+- **`ctx NN%` context fill** — how full the active session's context window is, computed
+  from that session's last turn (⚠ once fewer than 20k tokens remain to the model's
+  window). Shown when the current workspace has a session whose latest turn is less
+  than 6 hours old; both thresholds are fixed and not configurable. The share is not
+  clamped: `ctx 104%`
+  means the transcript has already outgrown the model's window — expect Claude Code to
+  compact it.
+- **§ credits as a cost unit** — cost segments can show z.ai credits instead of dollars
+  in compact notation: a rounded integer below 1000 (`§742`), from 1000 one decimal
+  with a suffix — always one decimal per tier (`§1.0k`, `§2.8k`, `§1.0M`, never `§1M`);
+  values from 999.5 — the first that rounds to 1000 — print in tier form (`§1.0k`).
+  The unit of every cost display is picked by `claudeStatus.display.primaryUnit`:
+  `auto` (default) means credits on z.ai and USD everywhere else, and an explicit
+  `credits` also degrades to USD on non-z.ai providers.
+
 ### 🗂 Dashboard Panel
 
 Click the status bar item to open a rich dashboard panel with:
 
 - **Current Usage** — colour-coded progress bars for 5 h and 7 d windows; the window that
-  reaches its limit turns red. On credit-based z.ai plans each bar also shows the credits used,
-  the total and what is left, with your plan tier next to the title
+  reaches its limit turns red. Shows the absolute 5-hour reset time. On z.ai a ⚡ mark
+  appears during the peak window. On credit-based z.ai plans each bar also shows the
+  credits used, the total and what is left, with your plan tier next to the title. A
+  reconciliation line "local §X · by quota §Y over 5h" compares locally counted credits
+  with the quota's own `used` — a mismatch means the extension's multipliers have drifted
+  from z.ai's rates.
 - **Token Cost** — 5 h / today / 7 d / month (est.) costs; expandable **token breakdown**
   shows per-type counts (input / output / cache read / cache create) with individual costs
-  and cache hit ratio
+  and cache hit ratio. Subagent transcripts (`<session>/subagents/*.jsonl`) are counted in
+  all aggregates.
 - **Project Cost** — per-workspace breakdown (today / 7 days / 30 days)
-- **Prediction** — burn rate ($/hr), time-to-exhaustion, daily & weekly budget tracking;
-  **Rate Limit Timeline chart** visualises the projected 5 h utilization from now to reset
+- **Prediction** — burn rate in both units ($/hr and, on z.ai, credits/hr),
+  time-to-exhaustion, daily & weekly budget tracking; on z.ai accounts with a live credit
+  quota the exhaustion forecast is built from the remaining credits; **Rate Limit Timeline
+  chart** visualises the projected 5 h utilization from now to reset
 - **Pricing & Settings** — always-visible card showing current token pricing rates,
   provider, API state, and cache TTL; opens VS Code settings with one click
 - **Usage History** — GitHub-style daily heatmap + hourly pattern bar chart
@@ -261,6 +317,7 @@ All settings are under the `claudeStatus` namespace in VS Code Settings.
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `claudeStatus.displayMode` | `"percent"` \| `"cost"` | `"percent"` | Status bar display mode |
+| `claudeStatus.display.primaryUnit` | `"auto"` \| `"credits"` \| `"usd"` | `"auto"` | Unit of every cost display: z.ai credits (§) or USD (`auto` = credits on z.ai; details above) |
 | `claudeStatus.statusBar.alignment` | `"left"` \| `"right"` | `"left"` | Status bar position |
 | `claudeStatus.statusBar.showProjectCost` | `boolean` | `true` | Show project cost in status bar |
 | `claudeStatus.cache.ttlSeconds` | `number` (60–3600) | `300` | API cache TTL in seconds |
@@ -284,6 +341,8 @@ All settings are under the `claudeStatus` namespace in VS Code Settings.
 // Example: settings.json
 {
   "claudeStatus.displayMode": "cost",
+  // Cost unit: "auto" = credits on z.ai, USD elsewhere ("credits" | "usd"):
+  // "claudeStatus.display.primaryUnit": "auto",
   "claudeStatus.budget.dailyUsd": 5.00,
   "claudeStatus.statusBar.showProjectCost": true,
   // Force GLM/z.ai if auto-detect doesn't pick it up:
